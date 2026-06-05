@@ -1,18 +1,115 @@
 //! # iqdb-filter
 //!
-//! Scaffold release (v0.1.0). The public surface is being designed across the
-//! 0.x series and frozen at v1.0. See `docs/API.md` and `dev/ROADMAP.md` for the
-//! current phase scope.
+//! Canonical [`iqdb_types::Filter`] evaluator for the HiveDB **iqdb**
+//! vector-database spine. One place that decides what `Filter` means; every
+//! index that supports metadata filtering delegates to it.
+//!
+//! ## Why this lives outside the index crates
+//!
+//! Filtering used to be inlined in `iqdb-flat`. The moment a second index
+//! (HNSW, IVF) starts honouring filters, two copies of the semantics would
+//! drift — the `Neq(absent)` / `Not(Eq(absent))` rule is exactly the kind of
+//! subtlety that splits between implementations and produces query-result
+//! bugs nobody can attribute. Extracting the evaluator pins one set of
+//! semantics across every consumer.
+//!
+//! ## Public surface
+//!
+//! - [`FilterEvaluator`] — `new(filter) -> Result<Self, IqdbError>` validates
+//!   the filter once (depth, `In` cardinality); `evaluate(metadata) -> bool`
+//!   is infallible on a validated filter.
+//! - [`FilterStrategy`] — vocabulary for how an index applies a filter. v0.2
+//!   exposes the variants only; selection logic lands with `MetadataIndex`
+//!   and the graph indexes.
+//! - [`MAX_FILTER_DEPTH`] / [`MAX_IN_VALUES`] — documented validation caps,
+//!   `pub const` so callers can quote them in error messages or higher-level
+//!   validation.
+//!
+//! ## Null and absent-field semantics
+//!
+//! The evaluator implements the **closed-world** rule pinned by
+//! [`iqdb_types::Filter`]: every leaf comparison (`Eq`, `Neq`, `Lt`, `Lte`,
+//! `Gt`, `Gte`, `In`) over a field absent from the record's metadata
+//! evaluates to `false`. Type mismatches between a stored value and a literal
+//! also evaluate to `false`. `Value::Float(NaN)` under any ordered comparison
+//! evaluates to `false` (IEEE-754 unordered). `Not` over a `false` leaf is
+//! `true`, which is the idiom for "records without this field, or with a
+//! non-matching value."
+//!
+//! `Neq(absent) → false` and `Not(Eq(absent)) → true` are therefore **not**
+//! interchangeable. The pair is pinned by the conformance tests in
+//! `tests/conformance.rs`.
+//!
+//! ## DoS hardening
+//!
+//! Construction is the validation gate. The walk is iterative (an explicit
+//! stack, not recursion), so `new` cannot itself stack-overflow on
+//! adversarial input. After construction every filter is bounded by
+//! [`MAX_FILTER_DEPTH`], so the recursive [`FilterEvaluator::evaluate`] hot
+//! path runs with a bounded call stack.
+//!
+//! ## Example
+//!
+//! ```
+//! use iqdb_filter::FilterEvaluator;
+//! use iqdb_types::{Filter, Metadata, Value};
+//!
+//! # fn main() -> iqdb_types::Result<()> {
+//! let filter = Filter::and(vec![
+//!     Filter::eq("published", Value::Bool(true)),
+//!     Filter::gt("year", Value::Int(2000)),
+//! ]);
+//! let evaluator = FilterEvaluator::new(filter)?;
+//!
+//! let meta: Metadata = [
+//!     ("published".to_string(), Value::Bool(true)),
+//!     ("year".to_string(), Value::Int(2026)),
+//! ]
+//! .into_iter()
+//! .collect();
+//!
+//! assert!(evaluator.evaluate(Some(&meta)));
+//! assert!(!evaluator.evaluate(None));
+//! # Ok(())
+//! # }
+//! ```
 
-#![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![deny(warnings)]
 #![deny(missing_docs)]
+#![deny(unsafe_op_in_unsafe_fn)]
+#![deny(unused_must_use)]
+#![deny(unused_results)]
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::todo)]
+#![deny(clippy::unimplemented)]
+#![deny(clippy::print_stdout)]
+#![deny(clippy::print_stderr)]
+#![deny(clippy::dbg_macro)]
+#![deny(clippy::unreachable)]
+#![deny(clippy::undocumented_unsafe_blocks)]
 #![forbid(unsafe_code)]
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn smoke() {
-        assert_eq!(1 + 1, 2);
-    }
-}
+mod eval;
+mod evaluator;
+mod strategy;
+
+pub use crate::evaluator::{FilterEvaluator, MAX_FILTER_DEPTH, MAX_IN_VALUES};
+pub use crate::strategy::FilterStrategy;
+
+/// The version of this crate, taken from `Cargo.toml` at compile time.
+///
+/// Exposed so a consumer can report the exact `iqdb-filter` build it links
+/// against — useful in diagnostics and version-skew checks across the iqdb
+/// crate family.
+///
+/// # Examples
+///
+/// ```
+/// // Carries a `major.minor.patch` SemVer core.
+/// let version = iqdb_filter::VERSION;
+/// assert_eq!(version.split('.').count(), 3);
+/// assert!(version.split('.').all(|part| !part.is_empty()));
+/// ```
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

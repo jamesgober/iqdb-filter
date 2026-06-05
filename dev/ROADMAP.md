@@ -15,42 +15,80 @@ Compiles, CI green, structure correct, no domain logic.
 
 ---
 
-## v0.2.0 -- filter evaluation against metadata + selectivity estimate (THE HARD PART, NOT DEFERRED)
+## v0.2.0 -- Canonical filter evaluator (DONE)
 
-Exit criteria:
-- [ ] Every public item has rustdoc + a runnable example.
-- [ ] Core invariants property-tested.
+The hard part of the crate's core: one evaluator that decides what a `Filter`
+means, shared by every consumer so the semantics cannot drift.
 
----
+- [x] `FilterEvaluator` -- validation-on-construction (depth + `In` caps,
+      iterative so `new` cannot overflow) and an infallible, allocation-free
+      per-row `evaluate`.
+- [x] Closed-world null / absent-field semantics, including the
+      `Neq(absent)` / `Not(Eq(absent))` distinction.
+- [x] `FilterStrategy` vocabulary enum (`#[non_exhaustive]`, variants only).
+- [x] `MAX_FILTER_DEPTH` / `MAX_IN_VALUES` public caps; `VERSION`.
+- [x] Every public item has rustdoc + a runnable example.
+- [x] Core invariants property-tested (`tests/properties.rs`) and pinned as
+      conformance integration tests (`tests/conformance.rs`).
+- [x] `criterion` bench on the validation and evaluation paths.
 
-## v0.3.0 -- pre/post/in strategies + auto selection
-
-Exit criteria:
-- [ ] New surface tested and benchmarked where it is a hot path.
-
----
-
-## v0.4.0 -- optional per-field metadata inverted index + feature freeze
-
-Exit criteria:
-- [ ] No `todo!`/`unimplemented!`. Feature freeze declared.
-
----
-
-## v0.5.0 -- pushdown-correctness (no recall collapse) + API freeze
-
-Exit criteria:
-- [ ] Public API frozen (recorded here). `cargo audit` + `cargo deny` clean.
+**Deferral recorded (anti-deferral rule).** The original plan paired the
+evaluator with a *selectivity estimate* in this phase. The estimate is moved
+out to the strategy-selection phase below, because a selectivity number has no
+honest source until the inverted `MetadataIndex` exists, and that index has no
+consumer until an approximate index honours filters. A placeholder estimate
+("0.5 always") would be worse than none -- it would teach a future selector to
+make confident wrong choices. Documented, deferred, not stubbed.
 
 ---
 
-## v0.6.0 -> v0.9.x -- Alpha / Beta -> RC
+## Deferred until the first approximate-index consumer
 
-- 0.6.x-0.7.x: integrate against real consumers; MINOR-compatible additions only.
-- 0.8.x (beta): bug fixes; broader testing; final benchmarks.
-- 0.9.x (rc): critical fixes + doc polish.
+Everything below was considered for the 0.x core and dropped because it has no
+real consumer yet (`iqdb-flat`, the only metadata-aware index today, pre-filters
+with a row scan). Each lands when `iqdb-hnsw` / `iqdb-ivf` start honouring
+filters and the cost model actually changes -- not before.
+
+### Inverted `MetadataIndex` (opt-in per field)
+
+A per-field index from `Value` to a set of vector ids, so a selective predicate
+can hand the index a candidate set instead of scanning every row. Per-field
+opt-in (indexing every field inflates resident memory and write amplification),
+and gated on a string-cap policy in `iqdb-types` for the unbounded metadata
+surface.
+
+### Selectivity estimate
+
+`selectivity_estimate(&Filter, &MetadataIndex) -> f64` in `[0.0, 1.0]`, a
+best-effort cardinality estimate the selector may ignore. Real sources only
+exist once the index does: per-field histograms for ordered domains,
+sketches (HyperLogLog / count-min) for high-cardinality and membership domains.
+
+### Strategy auto-selection
+
+Given a filter and an estimate, pick `FilterStrategy::{PreFilter, PostFilter,
+InFilter}`. The decision threshold is non-obvious and workload-dependent;
+choosing it without a real workload would bake in the wrong number.
+
+### Filter pushdown into graph traversal
+
+`FilterStrategy::InFilter`: prune HNSW / IVF branches that provably cannot
+produce a surviving candidate, without collapsing recall. Requires
+`MetadataIndex` co-design and a clear story for how pruning interacts with the
+approximate index's recall guarantees.
 
 ---
+
+## Toward 1.0
+
+- **Strategy phase** -- the four deferred items above, in order, each with
+  tests and benchmarks where it is a hot path. Feature freeze declared at the
+  end (no `todo!` / `unimplemented!`).
+- **API freeze** -- public API frozen and recorded here; `cargo audit` +
+  `cargo deny` clean.
+- **Alpha / Beta / RC (0.6.x -> 0.9.x)** -- integrate against real consumers
+  (MINOR-compatible additions only), broaden testing, final benchmarks, doc
+  polish.
 
 ## v1.0.0 -- Stable
 
@@ -64,3 +102,10 @@ Exit criteria:
 
 - The `Filter` type itself -- defined in `iqdb-types`.
 - A full query language -- expression evaluation only.
+- A different evaluator algorithm. The recursive walker is simple, fast on the
+  bounded-depth filters this crate accepts, and correct. Replacing it with a
+  bytecode compiler or JIT is speculative until a profile shows it costs
+  anything.
+- `Filter` rewriting / canonicalisation (constant-fold, push `Not` down,
+  reorder `And` children by selectivity) -- all depend on the deferred
+  selectivity estimates; premature without them.

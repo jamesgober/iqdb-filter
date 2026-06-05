@@ -73,7 +73,7 @@ Tier 1 covers the entire common case in a handful of calls, with no builder and 
 
 ## 8. Project-specific invariants
 
-Stack: Rust edition 2024, MSRV 1.85. Errors via `error-forge`. Tests via `cargo test` + `criterion` + `loom` + `proptest`.
+Stack: Rust edition 2024, MSRV 1.87. Errors via `error-forge`. Tests via `cargo test` + `criterion` + `loom` + `proptest`.
 
 - Strategy selection is correctness-and-performance critical: pre-filter for highly selective, post-filter for non-selective, in-traversal for medium.
 - Filter pushdown must not prune all paths, or recall collapses; the known-good traversal approach is used.

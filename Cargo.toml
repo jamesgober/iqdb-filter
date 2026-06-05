@@ -9,10 +9,10 @@
 #╚═══════════════════════════════╝
 [package]
 name    = "iqdb-filter"
-version = "0.1.0"
+version = "0.2.0"
 
 # Minimum Supported Rust Version (MSRV)
-rust-version = "1.85"
+rust-version = "1.87"
 edition = "2024"
 
 # License
@@ -22,7 +22,7 @@ license = "Apache-2.0 OR MIT"
 readme = "README.md"
 
 # Description
-description = "Metadata and vector hybrid filtering with pre/post/in-traversal strategies - part of the iQDB family."
+description = "Canonical metadata-filter evaluator for vector search: validate-on-construction and infallible per-row evaluation - part of the iQDB family."
 
 # Keywords (5 max)
 keywords = [
@@ -46,7 +46,8 @@ documentation = "https://docs.rs/iqdb-filter"
 
 # Authors
 authors = [
-    "James Gober <me@jamesgober.com>"
+    "James Gober <me@jamesgober.com>",
+    "Matt Callahan <matthewcallahan01@icloud.com>"
 ]
 
 [package.metadata.docs.rs]
@@ -61,17 +62,16 @@ path = "src/lib.rs"
 # FEATURE FLAGS
 # #################################
 [features]
-default = ["std"]
-# Standard library.
-std = []
-# Serialization support.
-serde = ["dep:serde"]
+# Default build: the canonical evaluator and the FilterStrategy vocabulary.
+# No optional dependencies.
+default = []
 
 
 # DEPENDENCIES
 # #################################
 [dependencies]
-serde = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
+# Shared public vocabulary: Filter, Metadata, Value, IqdbError, Result.
+iqdb-types = "1.0.0"
 
 
 # DEV DEPENDENCIES

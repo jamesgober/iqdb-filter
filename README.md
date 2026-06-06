@@ -43,7 +43,8 @@
 - **Closed-world semantics** &mdash; a leaf over an absent field is `false`, type mismatches are `false`, `NaN` orderings are `false`, and `Not` of a `false` leaf is `true` (the "records without this field" idiom)
 - **DoS-hardened** &mdash; iterative validation that can't stack-overflow, with bounded depth and `In` width; the library never panics on adversarial input
 - **Scan helpers** &mdash; `prefilter` / `postfilter` apply the evaluator as lazy, allocation-free iterator adapters over a stream of `(key, metadata)` pairs
-- **Strategy selection** &mdash; a structural selectivity estimate drives an automatic `PreFilter` / `PostFilter` choice, with a tunable threshold
+- **Strategy selection** &mdash; a selectivity estimate drives an automatic `PreFilter` / `PostFilter` choice, with a tunable threshold
+- **Inverted index** &mdash; an opt-in, per-field `MetadataIndex` resolves selective `Eq` / `In` predicates to a candidate set (a superset of true matches) and backs a sharper, count-based selectivity estimate
 - **First-party only** &mdash; depends solely on `iqdb-types`, so it is unblocked today
 
 <br>
@@ -52,7 +53,7 @@
 
 ```toml
 [dependencies]
-iqdb-filter = "0.3"
+iqdb-filter = "0.4"
 ```
 
 <br>
@@ -133,6 +134,33 @@ assert_eq!(kept, [0]);
 assert_eq!(choose_strategy(&evaluator), FilterStrategy::PreFilter);
 ```
 
+For repeated queries, build an opt-in `MetadataIndex` so a selective predicate resolves to a candidate set instead of scanning every row:
+
+```rust
+use iqdb_filter::{FilterEvaluator, MetadataIndex};
+use iqdb_types::{Filter, Metadata, Value};
+
+let rows = [
+    (0_usize, [("lang".to_string(), Value::String("rust".into()))].into_iter().collect::<Metadata>()),
+    (1, [("lang".to_string(), Value::String("go".into()))].into_iter().collect::<Metadata>()),
+    (2, [("lang".to_string(), Value::String("rust".into()))].into_iter().collect::<Metadata>()),
+];
+
+// Index only the `lang` field.
+let index = MetadataIndex::build(&["lang"], rows.iter().map(|(k, m)| (*k, Some(m))));
+
+let evaluator = FilterEvaluator::new(Filter::eq("lang", Value::String("rust".into())))
+    .expect("valid filter");
+
+// `candidates` returns a superset of true matches; confirm with `evaluate`.
+let mut hits: Vec<usize> = match index.candidates(&evaluator) {
+    Some(cands) => cands,
+    None => (0..rows.len()).collect(), // unbounded predicate -> full scan
+};
+hits.sort_unstable();
+assert_eq!(hits, [0, 2]);
+```
+
 <br>
 
 ## Errors
@@ -147,17 +175,18 @@ with no metadata, type mismatches, and `NaN` values.
 
 ## Status
 
-<code>v0.3.0</code> &mdash; the evaluator plus strategy selection. On top of the
-canonical `FilterEvaluator` (validate-on-construction, infallible allocation-free
-per-row `evaluate`), this release adds the `prefilter` / `postfilter` scan
-helpers, a structural `estimate_selectivity`, and a tunable selector
-(`choose_strategy` / `StrategySelector`) that resolves `PreFilter` vs
-`PostFilter`. Semantics and the new surface are pinned by unit, integration, and
-property tests, verified across the CI matrix (Linux, macOS, Windows) on stable
-and the 1.87 MSRV. The optional inverted `MetadataIndex`, index-backed
-selectivity, and `InFilter` pushdown remain deferred until the first
-approximate-index consumer lands — see the <a href="./dev/ROADMAP.md"><code>ROADMAP</code></a>
-for the rationale. The full surface is documented in <a href="./docs/API.md"><code>docs/API.md</code></a>.
+<code>v0.4.0</code> &mdash; the evaluator, strategy selection, and the inverted
+index. On top of the canonical `FilterEvaluator` (validate-on-construction,
+infallible allocation-free per-row `evaluate`), the crate ships the `prefilter` /
+`postfilter` scan helpers, the `estimate_selectivity` + selector
+(`choose_strategy` / `StrategySelector`), and an opt-in per-field
+`MetadataIndex` that resolves selective `Eq` / `In` predicates to a candidate set
+and backs a count-based selectivity estimate. Semantics, the superset contract,
+and the new surface are pinned by unit, integration, and property tests, verified
+across the CI matrix (Linux, macOS, Windows) on stable and the 1.87 MSRV. Only
+`InFilter` pushdown into graph traversal remains deferred, until the first
+approximate-index consumer lands — see the <a href="./dev/ROADMAP.md"><code>ROADMAP</code></a>.
+The full surface is documented in <a href="./docs/API.md"><code>docs/API.md</code></a>.
 
 <hr>
 <br>

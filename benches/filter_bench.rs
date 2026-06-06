@@ -9,7 +9,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use iqdb_filter::{FilterEvaluator, choose_strategy, estimate_selectivity};
+use iqdb_filter::{FilterEvaluator, MetadataIndex, choose_strategy, estimate_selectivity};
 use iqdb_types::{Filter, Metadata, Value};
 
 /// A representative compound predicate: `published AND (year > 2000 OR
@@ -110,11 +110,57 @@ fn bench_prefilter(c: &mut Criterion) {
     });
 }
 
+fn bench_index(c: &mut Criterion) {
+    // 1k rows over two indexed fields: `lang` (4 values) and `tier` (Int).
+    let langs = ["rust", "go", "python", "zig"];
+    let rows: Vec<(usize, Metadata)> = (0..1000)
+        .map(|i| {
+            let meta: Metadata = [
+                (
+                    "lang".to_string(),
+                    Value::String(langs[i % langs.len()].into()),
+                ),
+                ("tier".to_string(), Value::Int((i % 5) as i64)),
+            ]
+            .into_iter()
+            .collect();
+            (i, meta)
+        })
+        .collect();
+
+    let mut group = c.benchmark_group("index");
+    group.bench_function("build/1k_rows_2_fields", |b| {
+        b.iter(|| {
+            let index =
+                MetadataIndex::build(&["lang", "tier"], rows.iter().map(|(k, m)| (*k, Some(m))));
+            black_box(index)
+        })
+    });
+
+    let index = MetadataIndex::build(&["lang", "tier"], rows.iter().map(|(k, m)| (*k, Some(m))));
+    let eq = FilterEvaluator::new(Filter::eq("lang", Value::String("rust".into())))
+        .expect("valid filter");
+    let and = FilterEvaluator::new(Filter::and(vec![
+        Filter::eq("lang", Value::String("rust".into())),
+        Filter::eq("tier", Value::Int(2)),
+    ]))
+    .expect("valid filter");
+
+    group.bench_function("candidates/eq", |b| {
+        b.iter(|| black_box(index.candidates(black_box(&eq))))
+    });
+    group.bench_function("candidates/and", |b| {
+        b.iter(|| black_box(index.candidates(black_box(&and))))
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_new,
     bench_evaluate,
     bench_strategy,
-    bench_prefilter
+    bench_prefilter,
+    bench_index
 );
 criterion_main!(benches);

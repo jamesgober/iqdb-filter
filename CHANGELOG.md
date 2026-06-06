@@ -18,6 +18,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [0.4.0] - 2026-06-05
+
+Inverted metadata index. A selective `Eq` / `In` predicate can now resolve to a
+candidate key set instead of scanning every row, and the strategy selector
+gains a data-backed selectivity estimate.
+
+### Added
+
+- `MetadataIndex<K>` — an opt-in, per-field inverted index. `build(fields,
+  records)` indexes only the named fields; `candidates(&FilterEvaluator)`
+  returns a candidate key set (a superset of true matches; the caller confirms
+  with `evaluate`) for resolvable `Eq` / `In` / `And` / `Or` predicates over
+  `String` / `Int` / `Bool` / `Null` values, or `None` when it cannot bound the
+  query (ranges, `Neq`, `Not`, `Float` literals, non-indexed fields). Includes
+  `len`, `is_empty`, `is_indexed`, and `indexed_fields`.
+- `MetadataIndex::estimate_selectivity` — a data-backed selectivity estimate
+  using real posting counts where available, falling back to the structural
+  estimate elsewhere.
+- `StrategySelector::choose_with_index` — resolves a strategy from the
+  index-backed estimate.
+
+### Changed
+
+- `FilterStrategy::Auto` resolution can now be index-informed via
+  `choose_with_index`; the structural `choose` / `choose_strategy` are unchanged.
+
+---
+
 ## [0.3.0] - 2026-06-05
 
 Strategy selection. The `FilterStrategy` vocabulary becomes actionable: a
@@ -103,7 +131,8 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `REPS.md` compliance baseline.
 - `.github/workflows/ci.yml` CI matrix; `deny.toml`, `clippy.toml`, `rustfmt.toml`.
 - `dev/DIRECTIVES.md` and `dev/ROADMAP.md` (committed engineering standards + plan).
-[Unreleased]: https://github.com/jamesgober/iqdb-filter/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jamesgober/iqdb-filter/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jamesgober/iqdb-filter/releases/tag/v0.1.0

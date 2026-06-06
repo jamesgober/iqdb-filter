@@ -1,7 +1,7 @@
 # iqdb-filter &mdash; API Reference
 
 > Complete reference for **every** public item in `iqdb-filter` as of
-> **v0.3.0**: what it is, its parameters and return shape, and worked examples
+> **v0.4.0**: what it is, its parameters and return shape, and worked examples
 > for each use case.
 >
 > **Status: pre-1.0.** The public API is being designed across the 0.x series
@@ -29,6 +29,12 @@
   - [`estimate_selectivity`](#estimate_selectivity)
   - [`choose_strategy`](#choose_strategy)
   - [`StrategySelector`](#strategyselector)
+- [The inverted index](#the-inverted-index)
+  - [`MetadataIndex`](#metadataindex)
+  - [`MetadataIndex::build`](#metadataindexbuild)
+  - [`MetadataIndex::candidates`](#metadataindexcandidates)
+  - [`MetadataIndex::estimate_selectivity`](#metadataindexestimate_selectivity)
+  - [Inspecting the index](#inspecting-the-index)
 - [`FilterStrategy`](#filterstrategy)
 - [Errors](#errors)
 - [Feature flags](#feature-flags)
@@ -415,6 +421,9 @@ impl StrategySelector {
     pub fn with_prefilter_threshold(self, threshold: f64) -> Self; // clamped to [0.0, 1.0]
     pub fn prefilter_threshold(&self) -> f64;
     pub fn choose(&self, evaluator: &FilterEvaluator) -> FilterStrategy;
+    pub fn choose_with_index<K: Clone + Eq + Hash>(
+        &self, evaluator: &FilterEvaluator, index: &MetadataIndex<K>,
+    ) -> FilterStrategy;
 }
 ```
 
@@ -423,6 +432,31 @@ type is immutable — `with_prefilter_threshold` returns a new selector. `choose
 returns `PreFilter` when the estimate is at or below the threshold, `PostFilter`
 otherwise. An out-of-range threshold is clamped, never a panic.
 
+`choose_with_index` is the same decision driven by the **index-backed**
+estimate ([`MetadataIndex::estimate_selectivity`](#metadataindexestimate_selectivity)) —
+prefer it when an index is available, since the count-based estimate is sharper
+than the structural one.
+
+```rust
+use iqdb_filter::{FilterEvaluator, FilterStrategy, MetadataIndex, StrategySelector};
+use iqdb_types::{Filter, Metadata, Value};
+
+let rows = [
+    (0_usize, [("tier".to_string(), Value::Int(1))].into_iter().collect::<Metadata>()),
+    (1, [("tier".to_string(), Value::Int(2))].into_iter().collect::<Metadata>()),
+    (2, [("tier".to_string(), Value::Int(2))].into_iter().collect::<Metadata>()),
+    (3, [("tier".to_string(), Value::Int(2))].into_iter().collect::<Metadata>()),
+];
+let index = MetadataIndex::build(&["tier"], rows.iter().map(|(k, m)| (*k, Some(m))));
+let evaluator = FilterEvaluator::new(Filter::eq("tier", Value::Int(1))).expect("valid");
+
+// The index sees the true 1-in-4 selectivity: narrow -> pre-filter.
+assert_eq!(
+    StrategySelector::new().choose_with_index(&evaluator, &index),
+    FilterStrategy::PreFilter,
+);
+```
+
 ```rust
 use iqdb_filter::{FilterEvaluator, FilterStrategy, StrategySelector};
 use iqdb_types::{Filter, Value};
@@ -430,6 +464,142 @@ use iqdb_types::{Filter, Value};
 let selector = StrategySelector::new().with_prefilter_threshold(1.0); // always pre-filter
 let broad = FilterEvaluator::new(Filter::neq("id", Value::Int(7))).expect("valid");
 assert_eq!(selector.choose(&broad), FilterStrategy::PreFilter);
+```
+
+---
+
+## The inverted index
+
+### `MetadataIndex`
+
+```rust
+#[derive(Debug, Clone)]
+pub struct MetadataIndex<K> { /* private */ }
+```
+
+An opt-in, per-field inverted index over record metadata. `K` is the caller's
+row key (a storage index, an `iqdb_types::VectorId`, any `Clone + Eq + Hash`
+handle). For each indexed field it maps a metadata value to the keys carrying
+it, so a selective `Eq` / `In` predicate resolves to a candidate set instead of
+a full scan.
+
+**Correctness contract.** When [`candidates`](#metadataindexcandidates) returns
+`Some(set)`, `set` is a **superset** of the records the evaluator accepts — false
+positives are allowed (confirm with `evaluate`), false negatives never happen.
+
+**What it resolves.** `Eq` / `In` on an indexed field whose literal is
+`String` / `Int` / `Bool` / `Null`; `And` (intersection of resolvable children);
+`Or` (union, only if every child resolves). Everything else — ranges, `Neq`,
+`Not`, `Float` literals, non-indexed fields — yields `None` ("scan everything").
+
+### `MetadataIndex::build`
+
+```rust
+pub fn build<'a, I>(fields: &[&str], records: I) -> MetadataIndex<K>
+where
+    I: IntoIterator<Item = (K, Option<&'a Metadata>)>;
+```
+
+Builds an index over the explicitly-named `fields` from `records`. Only those
+fields are indexed (per-field opt-in keeps memory and build cost down). A record
+with `None` metadata, or missing an indexed field, still counts toward the total
+but contributes no postings. The index is immutable; rebuild to reflect new
+data.
+
+```rust
+use iqdb_filter::MetadataIndex;
+use iqdb_types::{Metadata, Value};
+
+let rows = [
+    (0_usize, [("lang".to_string(), Value::String("rust".into()))].into_iter().collect::<Metadata>()),
+    (1, [("lang".to_string(), Value::String("go".into()))].into_iter().collect::<Metadata>()),
+];
+let index = MetadataIndex::build(&["lang"], rows.iter().map(|(k, m)| (*k, Some(m))));
+assert_eq!(index.len(), 2);
+assert!(index.is_indexed("lang"));
+```
+
+### `MetadataIndex::candidates`
+
+```rust
+pub fn candidates(&self, evaluator: &FilterEvaluator) -> Option<Vec<K>>;
+```
+
+Resolves the filter to a candidate key set, or `None` when the index cannot
+bound it. The returned keys are unique and in unspecified order; `Some(vec![])`
+is a definitive "nothing matches", distinct from `None` ("can't tell — scan").
+Takes a validated `FilterEvaluator`, so the walk is depth-bounded.
+
+```rust
+use iqdb_filter::{FilterEvaluator, MetadataIndex};
+use iqdb_types::{Filter, Metadata, Value};
+
+let rows = [
+    (0_usize, [("tier".to_string(), Value::Int(1))].into_iter().collect::<Metadata>()),
+    (1, [("tier".to_string(), Value::Int(2))].into_iter().collect::<Metadata>()),
+];
+let index = MetadataIndex::build(&["tier"], rows.iter().map(|(k, m)| (*k, Some(m))));
+
+let eq = FilterEvaluator::new(Filter::eq("tier", Value::Int(1))).expect("valid");
+assert_eq!(index.candidates(&eq), Some(vec![0]));
+
+// A range is left to a full scan.
+let range = FilterEvaluator::new(Filter::gt("tier", Value::Int(1))).expect("valid");
+assert_eq!(index.candidates(&range), None);
+```
+
+The usual consumer pattern: resolve, then confirm exactness with `evaluate`.
+
+```rust
+let matches: Vec<usize> = match index.candidates(&evaluator) {
+    // Narrowed: confirm each candidate, since the set is a superset.
+    Some(candidates) => candidates
+        .into_iter()
+        .filter(|&key| evaluator.evaluate(metadata_of(key)))
+        .collect(),
+    // Unbounded predicate: fall back to a full scan over all rows.
+    None => all_rows
+        .iter()
+        .filter(|(_, meta)| evaluator.evaluate(Some(meta)))
+        .map(|(key, _)| *key)
+        .collect(),
+};
+```
+
+### `MetadataIndex::estimate_selectivity`
+
+```rust
+pub fn estimate_selectivity(&self, evaluator: &FilterEvaluator) -> f64;
+```
+
+A data-backed selectivity estimate in `[0.0, 1.0]`: an indexed `Eq` / `In` leaf
+contributes its real `matches / total` fraction, with the structural
+[`estimate_selectivity`](#estimate_selectivity) used for everything else. With
+zero records it falls back entirely to the structural estimate.
+
+```rust
+use iqdb_filter::{FilterEvaluator, MetadataIndex};
+use iqdb_types::{Filter, Metadata, Value};
+
+let rows = [
+    (0_usize, [("status".to_string(), Value::Int(1))].into_iter().collect::<Metadata>()),
+    (1, [("status".to_string(), Value::Int(2))].into_iter().collect::<Metadata>()),
+    (2, [("status".to_string(), Value::Int(2))].into_iter().collect::<Metadata>()),
+    (3, [("status".to_string(), Value::Int(2))].into_iter().collect::<Metadata>()),
+];
+let index = MetadataIndex::build(&["status"], rows.iter().map(|(k, m)| (*k, Some(m))));
+
+let eq = FilterEvaluator::new(Filter::eq("status", Value::Int(1))).expect("valid");
+assert!((index.estimate_selectivity(&eq) - 0.25).abs() < 1e-9); // the true 1-in-4
+```
+
+### Inspecting the index
+
+```rust
+pub fn len(&self) -> usize;                                  // records indexed
+pub fn is_empty(&self) -> bool;                              // len() == 0
+pub fn is_indexed(&self, field: &str) -> bool;              // is this field tracked?
+pub fn indexed_fields(&self) -> impl Iterator<Item = &str>; // the tracked fields
 ```
 
 ---
@@ -503,6 +673,7 @@ re-walk the filter or pre-check against the public caps.
 | `FilterEvaluator` | ✓ | ✓ | | | | |
 | `FilterStrategy` | ✓ | ✓ | ✓ | ✓ | ✓ | |
 | `StrategySelector` | ✓ | ✓ | ✓ | | | ✓ |
+| `MetadataIndex<K>` | ✓ (`K: Debug`) | ✓ (`K: Clone`) | | | | |
 
 ---
 

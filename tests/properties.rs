@@ -12,7 +12,9 @@
 
 #![allow(clippy::unwrap_used)]
 
-use iqdb_filter::{FilterEvaluator, choose_strategy, estimate_selectivity};
+use std::collections::HashSet;
+
+use iqdb_filter::{FilterEvaluator, MetadataIndex, choose_strategy, estimate_selectivity};
 use iqdb_types::{Filter, Metadata, Value};
 use proptest::prelude::*;
 
@@ -165,5 +167,46 @@ proptest! {
         let evaluator = FilterEvaluator::new(filter).unwrap();
         let chosen = choose_strategy(&evaluator);
         prop_assert!(matches!(chosen, FilterStrategy::PreFilter | FilterStrategy::PostFilter));
+    }
+
+    /// The core index contract: whenever `candidates` bounds the result, it is a
+    /// superset of every record the evaluator actually accepts.
+    #[test]
+    fn index_candidates_are_a_superset_of_true_matches(
+        filter in arb_filter(),
+        records in prop::collection::vec(arb_metadata(), 0..10),
+    ) {
+        let evaluator = FilterEvaluator::new(filter).unwrap();
+        let index = MetadataIndex::build(
+            FIELDS,
+            records.iter().enumerate().map(|(i, m)| (i, Some(m))),
+        );
+
+        if let Some(candidates) = index.candidates(&evaluator) {
+            // No false negatives: every accepted record is a candidate.
+            let candidate_set: HashSet<usize> = candidates.iter().copied().collect();
+            prop_assert_eq!(candidate_set.len(), candidates.len(), "candidates not unique");
+            for (i, m) in records.iter().enumerate() {
+                if evaluator.evaluate(Some(m)) {
+                    prop_assert!(candidate_set.contains(&i), "true match {} not a candidate", i);
+                }
+            }
+        }
+    }
+
+    /// The index-backed selectivity is always a probability, like the structural
+    /// one it refines.
+    #[test]
+    fn index_selectivity_is_a_probability(
+        filter in arb_filter(),
+        records in prop::collection::vec(arb_metadata(), 0..10),
+    ) {
+        let evaluator = FilterEvaluator::new(filter).unwrap();
+        let index = MetadataIndex::build(
+            FIELDS,
+            records.iter().enumerate().map(|(i, m)| (i, Some(m))),
+        );
+        let s = index.estimate_selectivity(&evaluator);
+        prop_assert!((0.0..=1.0).contains(&s), "index selectivity {s} out of range");
     }
 }

@@ -20,8 +20,12 @@
 //!   is infallible on a validated filter. [`FilterEvaluator::prefilter`] and
 //!   [`FilterEvaluator::postfilter`] apply it as lazy, allocation-free scan
 //!   adapters over a stream of `(key, metadata)` pairs.
+//! - [`MetadataIndex`] — an opt-in, per-field inverted index that resolves a
+//!   selective `Eq` / `In` predicate to a candidate key set (a superset of the
+//!   true matches), and backs a sharper, count-based selectivity estimate.
 //! - [`estimate_selectivity`] — a best-effort, structural estimate of the
-//!   fraction of records a validated filter passes, in `[0.0, 1.0]`.
+//!   fraction of records a validated filter passes, in `[0.0, 1.0]`; the
+//!   index-backed counterpart is [`MetadataIndex::estimate_selectivity`].
 //! - [`choose_strategy`] / [`StrategySelector`] — pick a concrete
 //!   [`FilterStrategy`] from the selectivity estimate. The free function uses
 //!   the [`DEFAULT_PREFILTER_THRESHOLD`]; the selector is the Tier-2 builder
@@ -101,10 +105,12 @@
 
 mod eval;
 mod evaluator;
+mod index;
 mod selectivity;
 mod strategy;
 
 pub use crate::evaluator::{FilterEvaluator, MAX_FILTER_DEPTH, MAX_IN_VALUES};
+pub use crate::index::MetadataIndex;
 pub use crate::selectivity::estimate_selectivity;
 pub use crate::strategy::{
     DEFAULT_PREFILTER_THRESHOLD, FilterStrategy, StrategySelector, choose_strategy,

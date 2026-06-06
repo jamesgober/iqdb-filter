@@ -178,7 +178,53 @@ impl StrategySelector {
     /// ```
     #[must_use]
     pub fn choose(&self, evaluator: &crate::FilterEvaluator) -> FilterStrategy {
-        if crate::estimate_selectivity(evaluator) <= self.prefilter_threshold {
+        self.resolve(crate::estimate_selectivity(evaluator))
+    }
+
+    /// Resolves the strategy using the **index-backed** selectivity estimate
+    /// from `index` ([`MetadataIndex::estimate_selectivity`](crate::MetadataIndex::estimate_selectivity)),
+    /// which uses real posting counts where it can.
+    ///
+    /// Prefer this over [`choose`](Self::choose) when an index is available:
+    /// the count-based estimate is sharper than the structural one, so the
+    /// pre/post decision is better informed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iqdb_filter::{FilterEvaluator, FilterStrategy, MetadataIndex, StrategySelector};
+    /// use iqdb_types::{Filter, Metadata, Value};
+    ///
+    /// # fn main() -> iqdb_types::Result<()> {
+    /// // 1 of 4 rows matches: a genuinely narrow predicate the index can see.
+    /// let rows = [
+    ///     (0_usize, [("tier".to_string(), Value::Int(1))].into_iter().collect::<Metadata>()),
+    ///     (1, [("tier".to_string(), Value::Int(2))].into_iter().collect::<Metadata>()),
+    ///     (2, [("tier".to_string(), Value::Int(2))].into_iter().collect::<Metadata>()),
+    ///     (3, [("tier".to_string(), Value::Int(2))].into_iter().collect::<Metadata>()),
+    /// ];
+    /// let index = MetadataIndex::build(&["tier"], rows.iter().map(|(k, m)| (*k, Some(m))));
+    ///
+    /// let evaluator = FilterEvaluator::new(Filter::eq("tier", Value::Int(1)))?;
+    /// let selector = StrategySelector::new();
+    /// assert_eq!(selector.choose_with_index(&evaluator, &index), FilterStrategy::PreFilter);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn choose_with_index<K>(
+        &self,
+        evaluator: &crate::FilterEvaluator,
+        index: &crate::MetadataIndex<K>,
+    ) -> FilterStrategy
+    where
+        K: Clone + Eq + core::hash::Hash,
+    {
+        self.resolve(index.estimate_selectivity(evaluator))
+    }
+
+    fn resolve(&self, selectivity: f64) -> FilterStrategy {
+        if selectivity <= self.prefilter_threshold {
             FilterStrategy::PreFilter
         } else {
             FilterStrategy::PostFilter

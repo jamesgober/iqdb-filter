@@ -18,11 +18,11 @@ use crate::FilterEvaluator;
 
 /// Assumed fraction of records an equality leaf (`Eq`) matches. Equality on a
 /// typical field selects a small slice of a corpus.
-const EQ_SELECTIVITY: f64 = 0.1;
+pub(crate) const EQ_SELECTIVITY: f64 = 0.1;
 
 /// Assumed fraction an ordered-range leaf (`Lt` / `Lte` / `Gt` / `Gte`)
 /// matches — a one-sided range is broader than equality but still a fraction.
-const RANGE_SELECTIVITY: f64 = 1.0 / 3.0;
+pub(crate) const RANGE_SELECTIVITY: f64 = 1.0 / 3.0;
 
 /// Estimate the fraction of records `evaluator`'s filter will pass, in
 /// `[0.0, 1.0]` — `0.0` means "matches almost nothing", `1.0` means "matches
@@ -66,6 +66,13 @@ const RANGE_SELECTIVITY: f64 = 1.0 / 3.0;
 #[must_use]
 pub fn estimate_selectivity(evaluator: &FilterEvaluator) -> f64 {
     estimate(evaluator.filter()).clamp(0.0, 1.0)
+}
+
+/// The structural per-leaf estimate, exposed within the crate so the
+/// index-backed estimator can fall back to it for nodes the index cannot
+/// resolve (ranges, negation, non-indexed fields).
+pub(crate) fn structural(filter: &Filter) -> f64 {
+    estimate(filter)
 }
 
 fn estimate(filter: &Filter) -> f64 {

@@ -57,38 +57,44 @@ The `FilterStrategy` vocabulary becomes actionable, without an inverted index.
       `prefilter` matches the manual filter; the selector never yields
       `Auto` / `InFilter`) and benchmarked.
 
-**Scope note (anti-deferral rule).** The selectivity estimate here is
-deliberately *structural*. An **index-backed** estimate (histograms / sketches)
-and the inverted `MetadataIndex` it reads stay deferred below -- the threshold
-the selector compares against is tunable precisely because the structural
-estimate is coarse. This is the "pre/post + heuristic auto" scope, chosen over
-building speculative index machinery with no consumer.
+**Scope note.** The selectivity estimate in this phase is deliberately
+*structural*; the **index-backed** estimate and the inverted `MetadataIndex` it
+reads were deferred from v0.3.0 and landed in v0.4.0 below.
+
+---
+
+## v0.4.0 -- Inverted metadata index (DONE)
+
+The opt-in per-field index and the data-backed selectivity estimate it enables.
+
+- [x] `MetadataIndex<K>` -- `build(fields, records)` indexes only the named
+      fields (per-field opt-in, so write/memory cost is paid only where it
+      buys query speed). `candidates(&FilterEvaluator) -> Option<Vec<K>>`
+      resolves `Eq` / `In` / `And` / `Or` over `String` / `Int` / `Bool` /
+      `Null`, returning a **superset** of true matches; `None` for the cases an
+      inverted index cannot bound (ranges, `Neq`, `Not`, `Float`, non-indexed
+      fields). Float is excluded by design: IEEE equality would risk a dropped
+      match.
+- [x] `MetadataIndex::estimate_selectivity` -- real `matches / total` counts for
+      resolvable leaves, structural fallback elsewhere.
+- [x] `StrategySelector::choose_with_index` -- the pre/post decision driven by
+      the index-backed estimate.
+- [x] Superset contract property-tested (every true match is a candidate);
+      selectivity-is-a-probability property-tested; `candidates` and `build`
+      benchmarked.
+
+**Scope note.** Histogram / sketch estimators (HyperLogLog, count-min) over the
+index are a future refinement, not required: exact posting counts already give
+an accurate equality/membership estimate. The string-cap policy in `iqdb-types`
+(audit item for unbounded metadata) remains the one open dependency before the
+index is hardened for hostile, high-cardinality input.
 
 ---
 
 ## Deferred until the first approximate-index consumer
 
-Everything below was considered for the 0.x core and dropped because it has no
-real consumer yet (`iqdb-flat`, the only metadata-aware index today, pre-filters
-with a row scan). Each lands when `iqdb-hnsw` / `iqdb-ivf` start honouring
-filters and the cost model actually changes -- not before.
-
-### Inverted `MetadataIndex` (opt-in per field)
-
-A per-field index from `Value` to a set of vector ids, so a selective predicate
-can hand the index a candidate set instead of scanning every row. Per-field
-opt-in (indexing every field inflates resident memory and write amplification),
-and gated on a string-cap policy in `iqdb-types` for the unbounded metadata
-surface.
-
-### Index-backed selectivity estimate
-
-A data-driven upgrade to the structural `estimate_selectivity` shipped in
-v0.3.0: `selectivity_estimate(&Filter, &MetadataIndex) -> f64` reading real
-sources -- per-field histograms for ordered domains, sketches (HyperLogLog /
-count-min) for high-cardinality and membership domains. Only worth building once
-the `MetadataIndex` above exists; until then the structural estimate plus a
-tunable threshold is the honest surface.
+What remains needs a real approximate index (`iqdb-hnsw` / `iqdb-ivf`) honouring
+filters before it can be built and validated honestly -- not before.
 
 ### Filter pushdown into graph traversal
 
@@ -101,16 +107,17 @@ approximate index's recall guarantees.
 
 ## Toward 1.0
 
-- **Index phase** -- the deferred items above (inverted `MetadataIndex`,
-  index-backed selectivity, `InFilter` pushdown), in order, each with tests and
-  benchmarks where it is a hot path, once a real approximate-index consumer
-  drives them. Feature freeze declared at the end (no `todo!` /
+- **Pushdown phase** -- the one deferred item above (`InFilter` pushdown into
+  graph traversal), once a real approximate-index consumer drives it, with tests
+  and benchmarks. `MetadataIndex` hardening (the `iqdb-types` string-cap policy)
+  lands here too. Feature freeze declared at the end (no `todo!` /
   `unimplemented!`).
 - **API freeze** -- public API frozen and recorded here; `cargo audit` +
   `cargo deny` clean.
 - **Alpha / Beta / RC (0.6.x -> 0.9.x)** -- integrate against real consumers
   (MINOR-compatible additions only), broaden testing, final benchmarks, doc
-  polish.
+  polish. Note: per SemVer, additive items like `InFilter` pushdown can also
+  ship post-1.0 in a MINOR release without waiting.
 
 ## v1.0.0 -- Stable
 

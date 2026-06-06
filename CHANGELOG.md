@@ -18,6 +18,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [1.0.0] - 2026-06-06
+
+First stable release. The public API frozen at 0.5.0 is now committed under
+SemVer for the 1.x series: no breaking changes until 2.0. Every
+Definition-of-Done criterion (`dev/DIRECTIVES.md` §7) is satisfied, and the
+surface is verified across the CI matrix (Linux, macOS, Windows) on stable and
+the 1.87 MSRV, with the no-panic and `MetadataIndex` superset contracts fuzzed.
+
+### Changed
+
+- Declared **1.0 stable**: the frozen surface (recorded in `dev/ROADMAP.md`) is
+  now under the SemVer 1.x compatibility guarantee. The **public API is
+  unchanged from 0.5.0** — this release is the stability commitment. The one
+  remaining feature, `InFilter` pushdown into graph traversal, stays additive
+  (`FilterStrategy` is `#[non_exhaustive]`) and will ship in a later 1.x MINOR
+  when an approximate-index consumer drives it.
+
+---
+
 ## [0.5.0] - 2026-06-05
 
 Hardening and API freeze. No new public surface — this release proves the
@@ -155,7 +174,8 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `REPS.md` compliance baseline.
 - `.github/workflows/ci.yml` CI matrix; `deny.toml`, `clippy.toml`, `rustfmt.toml`.
 - `dev/DIRECTIVES.md` and `dev/ROADMAP.md` (committed engineering standards + plan).
-[Unreleased]: https://github.com/jamesgober/iqdb-filter/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/jamesgober/iqdb-filter/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.5.0...v1.0.0
 [0.5.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.2.0...v0.3.0

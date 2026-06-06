@@ -1,12 +1,12 @@
 # iqdb-filter &mdash; API Reference
 
 > Complete reference for **every** public item in `iqdb-filter` as of
-> **v0.5.0**: what it is, its parameters and return shape, and worked examples
+> **v1.0.0**: what it is, its parameters and return shape, and worked examples
 > for each use case.
 >
-> **Status: API frozen (v0.5.0).** The surface below is committed — only
-> additive (MINOR) changes until 2.0. Items marked _(planned)_ describe
-> additive surface (`InFilter` pushdown) that lands with the first
+> **Status: stable (1.0).** The surface below is committed under SemVer for the
+> 1.x series — only additive (MINOR) changes until 2.0. Items marked _(planned)_
+> describe additive surface (`InFilter` pushdown) that lands with the first
 > approximate-index consumer; see `dev/ROADMAP.md`.
 
 ## Table of Contents

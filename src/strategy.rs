@@ -1,11 +1,12 @@
-//! [`FilterStrategy`] — vocabulary for how an index applies a [`Filter`].
+//! [`FilterStrategy`] — how an index applies a [`Filter`], and the selector
+//! that chooses it.
 //!
-//! This release ships the vocabulary only. The four named strategies describe
-//! the shapes a future selector will choose between; the selector itself, and
-//! the `MetadataIndex` / cardinality machinery it needs, land in a later
-//! release (see `dev/ROADMAP.md`). Today every consumer applies pre-filtering
-//! through [`crate::FilterEvaluator`] and ignores this enum — the enum exists
-//! so `MetadataIndex`-driven indexes can adopt it without a breaking change.
+//! [`FilterStrategy`] names the four shapes; [`StrategySelector`] and the
+//! Tier-1 [`choose_strategy`] resolve a concrete `PreFilter` / `PostFilter`
+//! from a selectivity estimate. `PreFilter` and `PostFilter` are realised by
+//! [`crate::FilterEvaluator::prefilter`] / [`crate::FilterEvaluator::postfilter`];
+//! `InFilter` (graph-traversal pushdown) remains reserved for a future
+//! approximate-index consumer (see `dev/ROADMAP.md`).
 //!
 //! [`Filter`]: iqdb_types::Filter
 

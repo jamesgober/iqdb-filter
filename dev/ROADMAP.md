@@ -150,11 +150,17 @@ approximate index's recall guarantees.
   index drives it. Additive (`FilterStrategy` is `#[non_exhaustive]`), so per
   SemVer it can ship pre- or post-1.0 in a MINOR release without waiting.
 
-## v1.0.0 -- Stable
+## v1.0.0 -- Stable (DONE)
 
-- [ ] Definition of Done (DIRECTIVES section 7) satisfied.
-- [ ] Public API frozen until 2.0.
-- [ ] Release note written; published to crates.io; tag pushed.
+- [x] Definition of Done (DIRECTIVES section 7) satisfied. (`loom` is N/A: the
+      crate has no shared-state or lock-free paths -- `FilterEvaluator` and
+      `MetadataIndex` are immutable and `Sync` by construction.)
+- [x] Public API frozen until 2.0 (committed under SemVer for the 1.x series).
+- [x] Release note written (`docs/release/v1.0.0.md`). Publishing to crates.io
+      and the tag push are handled by the maintainer.
+
+The crate is feature-complete for 1.0; `InFilter` pushdown is the lone additive
+follow-up, to land in a 1.x MINOR when a graph-index consumer drives it.
 
 ---
 

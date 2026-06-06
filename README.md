@@ -29,7 +29,7 @@
         <strong>MSRV is 1.87+</strong> (Rust 2024 edition). Validate once, evaluate per-row. No panics on hostile input. ~19 ns to evaluate a compound predicate.
     </p>
     <blockquote>
-        <strong>Status: pre-1.0, in active development.</strong> The public API is being designed across the 0.x series and frozen at <code>1.0.0</code>. See <a href="./CHANGELOG.md"><code>CHANGELOG.md</code></a>.
+        <strong>Status: stable (1.0).</strong> The public API is committed under SemVer for the 1.x series &mdash; no breaking changes until 2.0. See <a href="./CHANGELOG.md"><code>CHANGELOG.md</code></a>.
     </blockquote>
 </div>
 
@@ -53,7 +53,7 @@
 
 ```toml
 [dependencies]
-iqdb-filter = "0.5"
+iqdb-filter = "1.0"
 ```
 
 <br>
@@ -175,18 +175,19 @@ with no metadata, type mismatches, and `NaN` values.
 
 ## Status
 
-<code>v0.5.0</code> &mdash; **API frozen, hardening complete.** The full surface
-— the canonical `FilterEvaluator` (validate-on-construction, infallible
-allocation-free per-row `evaluate`), the `prefilter` / `postfilter` scan helpers,
-`estimate_selectivity` + the selector (`choose_strategy` / `StrategySelector`),
-and the opt-in per-field `MetadataIndex` — is now committed: only additive
+<code>v1.0.0</code> &mdash; **stable.** The full surface — the canonical
+`FilterEvaluator` (validate-on-construction, infallible allocation-free per-row
+`evaluate`), the `prefilter` / `postfilter` scan helpers, `estimate_selectivity`
++ the selector (`choose_strategy` / `StrategySelector`), and the opt-in per-field
+`MetadataIndex` — is committed under SemVer for the 1.x series: no breaking
 changes until 2.0. It is exercised by unit, integration, and property tests, a
 consumer-simulation suite that builds a filtered top-`k` searcher on the public
 API alone, and fuzz targets that drive the no-panic and superset contracts over
 unbounded input; all verified across the CI matrix (Linux, macOS, Windows) on
-stable and the 1.87 MSRV. Only `InFilter` pushdown into graph traversal remains
-to build — it is additive and gated on the first approximate-index consumer (see
-the <a href="./dev/ROADMAP.md"><code>ROADMAP</code></a>). The full surface is
+stable and the 1.87 MSRV. The one remaining feature, `InFilter` pushdown into
+graph traversal, is additive (`FilterStrategy` is `#[non_exhaustive]`) and will
+ship in a later 1.x release when an approximate-index consumer drives it (see the
+<a href="./dev/ROADMAP.md"><code>ROADMAP</code></a>). The full surface is
 documented in <a href="./docs/API.md"><code>docs/API.md</code></a>.
 
 <hr>

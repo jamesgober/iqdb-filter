@@ -9,7 +9,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use iqdb_filter::FilterEvaluator;
+use iqdb_filter::{FilterEvaluator, choose_strategy, estimate_selectivity};
 use iqdb_types::{Filter, Metadata, Value};
 
 /// A representative compound predicate: `published AND (year > 2000 OR
@@ -68,5 +68,53 @@ fn bench_evaluate(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_new, bench_evaluate);
+fn bench_strategy(c: &mut Criterion) {
+    let evaluator =
+        FilterEvaluator::new(representative_filter()).expect("representative filter is valid");
+
+    let mut group = c.benchmark_group("strategy");
+    group.bench_function("estimate_selectivity/compound", |b| {
+        b.iter(|| black_box(estimate_selectivity(black_box(&evaluator))))
+    });
+    group.bench_function("choose_strategy/compound", |b| {
+        b.iter(|| black_box(choose_strategy(black_box(&evaluator))))
+    });
+    group.finish();
+}
+
+fn bench_prefilter(c: &mut Criterion) {
+    let evaluator =
+        FilterEvaluator::new(representative_filter()).expect("representative filter is valid");
+
+    // 1k rows, half carrying matching metadata.
+    let rows: Vec<(usize, Option<Metadata>)> = (0..1000)
+        .map(|i| {
+            let meta = if i % 2 == 0 {
+                matching_metadata()
+            } else {
+                [("published".to_string(), Value::Bool(false))]
+                    .into_iter()
+                    .collect()
+            };
+            (i, Some(meta))
+        })
+        .collect();
+
+    c.bench_function("prefilter/1k_rows_50pct", |b| {
+        b.iter(|| {
+            let kept = evaluator
+                .prefilter(rows.iter().map(|(k, m)| (*k, m.as_ref())))
+                .count();
+            black_box(kept)
+        })
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_new,
+    bench_evaluate,
+    bench_strategy,
+    bench_prefilter
+);
 criterion_main!(benches);

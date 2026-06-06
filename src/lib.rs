@@ -17,10 +17,18 @@
 //!
 //! - [`FilterEvaluator`] — `new(filter) -> Result<Self, IqdbError>` validates
 //!   the filter once (depth, `In` cardinality); `evaluate(metadata) -> bool`
-//!   is infallible on a validated filter.
-//! - [`FilterStrategy`] — vocabulary for how an index applies a filter. v0.2
-//!   exposes the variants only; selection logic lands with `MetadataIndex`
-//!   and the graph indexes.
+//!   is infallible on a validated filter. [`FilterEvaluator::prefilter`] and
+//!   [`FilterEvaluator::postfilter`] apply it as lazy, allocation-free scan
+//!   adapters over a stream of `(key, metadata)` pairs.
+//! - [`estimate_selectivity`] — a best-effort, structural estimate of the
+//!   fraction of records a validated filter passes, in `[0.0, 1.0]`.
+//! - [`choose_strategy`] / [`StrategySelector`] — pick a concrete
+//!   [`FilterStrategy`] from the selectivity estimate. The free function uses
+//!   the [`DEFAULT_PREFILTER_THRESHOLD`]; the selector is the Tier-2 builder
+//!   for tuning it.
+//! - [`FilterStrategy`] — vocabulary for how an index applies a filter
+//!   relative to its distance scan. The selector resolves `Auto` down to
+//!   `PreFilter` / `PostFilter`; `InFilter` waits on a graph-index consumer.
 //! - [`MAX_FILTER_DEPTH`] / [`MAX_IN_VALUES`] — documented validation caps,
 //!   `pub const` so callers can quote them in error messages or higher-level
 //!   validation.
@@ -93,10 +101,14 @@
 
 mod eval;
 mod evaluator;
+mod selectivity;
 mod strategy;
 
 pub use crate::evaluator::{FilterEvaluator, MAX_FILTER_DEPTH, MAX_IN_VALUES};
-pub use crate::strategy::FilterStrategy;
+pub use crate::selectivity::estimate_selectivity;
+pub use crate::strategy::{
+    DEFAULT_PREFILTER_THRESHOLD, FilterStrategy, StrategySelector, choose_strategy,
+};
 
 /// The version of this crate, taken from `Cargo.toml` at compile time.
 ///

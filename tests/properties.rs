@@ -12,7 +12,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use iqdb_filter::FilterEvaluator;
+use iqdb_filter::{FilterEvaluator, choose_strategy, estimate_selectivity};
 use iqdb_types::{Filter, Metadata, Value};
 use proptest::prelude::*;
 
@@ -129,5 +129,41 @@ proptest! {
 
         let in_set = Filter::is_in(ABSENT_FIELD, vec![value]);
         prop_assert!(!eval(in_set, &meta));
+    }
+
+    #[test]
+    fn selectivity_is_always_a_probability(filter in arb_filter()) {
+        let evaluator = FilterEvaluator::new(filter).unwrap();
+        let s = estimate_selectivity(&evaluator);
+        prop_assert!((0.0..=1.0).contains(&s), "selectivity {s} out of range");
+    }
+
+    #[test]
+    fn prefilter_yields_exactly_the_matching_keys(
+        filter in arb_filter(),
+        records in prop::collection::vec(arb_metadata(), 0..8),
+    ) {
+        let evaluator = FilterEvaluator::new(filter).unwrap();
+
+        // Ground truth: the indices whose metadata the evaluator accepts.
+        let expected: Vec<usize> = records
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| evaluator.evaluate(Some(m)))
+            .map(|(i, _)| i)
+            .collect();
+
+        let rows = records.iter().enumerate().map(|(i, m)| (i, Some(m)));
+        let kept: Vec<usize> = evaluator.prefilter(rows).collect();
+
+        prop_assert_eq!(kept, expected);
+    }
+
+    #[test]
+    fn choose_strategy_never_returns_auto_or_infilter(filter in arb_filter()) {
+        use iqdb_filter::FilterStrategy;
+        let evaluator = FilterEvaluator::new(filter).unwrap();
+        let chosen = choose_strategy(&evaluator);
+        prop_assert!(matches!(chosen, FilterStrategy::PreFilter | FilterStrategy::PostFilter));
     }
 }

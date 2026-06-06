@@ -1,11 +1,8 @@
-<h1 align="center">
-    <img width="90px" height="auto" src="https://raw.githubusercontent.com/jamesgober/jamesgober/main/media/icons/hexagon-3.svg" alt="Triple Hexagon">
-    <br><b>CHANGELOG</b>
-</h1>
-<p>
-  All notable changes to <code>iqdb-filter</code> will be documented in this file. The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
-  and this project adheres to <a href="https://semver.org/spec/v2.0.0.html/">Semantic Versioning</a>.
-</p>
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
@@ -18,6 +15,35 @@
 ### Fixed
 
 ### Security
+
+---
+
+## [0.3.0] - 2026-06-05
+
+Strategy selection. The `FilterStrategy` vocabulary becomes actionable: a
+selectivity estimate drives an automatic `PreFilter` / `PostFilter` choice, and
+the evaluator gains the scan helpers that apply each strategy.
+
+### Added
+
+- `FilterEvaluator::prefilter` &mdash; a lazy, allocation-free iterator adapter
+  that keeps the keys of candidates whose metadata matches, before scoring
+  (the `PreFilter` shape).
+- `FilterEvaluator::postfilter` &mdash; the same per-row test applied to
+  already-scored hits, lazy so a caller can `.take(k)` while refilling a
+  top-`k` result set (the `PostFilter` shape).
+- `estimate_selectivity` &mdash; a best-effort, structural estimate (in
+  `[0.0, 1.0]`) of the fraction of records a validated filter passes. Takes a
+  `FilterEvaluator`, so the walk is depth-bounded and cannot overflow.
+- `choose_strategy` (Tier 1) and `StrategySelector` (Tier 2, tunable
+  `prefilter_threshold`) &mdash; resolve a concrete `FilterStrategy`
+  (`PreFilter` for narrow predicates, `PostFilter` for broad ones) from the
+  estimate. `DEFAULT_PREFILTER_THRESHOLD` (`0.5`) is the documented default.
+
+### Changed
+
+- `FilterStrategy::Auto` is now resolved by the selector; `InFilter` remains
+  reserved for a future graph-traversal consumer.
 
 ---
 
@@ -77,7 +103,7 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `REPS.md` compliance baseline.
 - `.github/workflows/ci.yml` CI matrix; `deny.toml`, `clippy.toml`, `rustfmt.toml`.
 - `dev/DIRECTIVES.md` and `dev/ROADMAP.md` (committed engineering standards + plan).
-[Unreleased]: https://github.com/jamesgober/iqdb-filter/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.1.5...v0.2.0
-[0.1.5]: https://github.com/jamesgober/iqdb-filter/compare/v0.1.0...v0.1.5
+[Unreleased]: https://github.com/jamesgober/iqdb-filter/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jamesgober/iqdb-filter/releases/tag/v0.1.0

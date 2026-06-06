@@ -155,6 +155,93 @@ impl FilterEvaluator {
         eval::eval(&self.filter, metadata)
     }
 
+    /// Pre-filter a stream of candidates: yield the key of each candidate whose
+    /// metadata matches, **before** any distance is computed.
+    ///
+    /// This is the [`FilterStrategy::PreFilter`](crate::FilterStrategy::PreFilter)
+    /// shape — reduce the candidate set first, then score only the survivors.
+    /// It is the pattern an exact index uses to skip the distance computation
+    /// for rows the predicate already rejects.
+    ///
+    /// The adapter is lazy and allocation-free: it borrows each candidate's
+    /// metadata and forwards the key untouched. `key` is whatever a caller uses
+    /// to identify a row — a storage index, a [`iqdb_types::VectorId`], a tuple.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iqdb_filter::FilterEvaluator;
+    /// use iqdb_types::{Filter, Metadata, Value};
+    ///
+    /// # fn main() -> iqdb_types::Result<()> {
+    /// let evaluator = FilterEvaluator::new(Filter::gt("year", Value::Int(2000)))?;
+    ///
+    /// let m2026: Metadata = [("year".to_string(), Value::Int(2026))].into_iter().collect();
+    /// let m1999: Metadata = [("year".to_string(), Value::Int(1999))].into_iter().collect();
+    /// let rows = [(0_usize, Some(&m2026)), (1, Some(&m1999)), (2, None)];
+    ///
+    /// let kept: Vec<usize> = evaluator.prefilter(rows).collect();
+    /// assert_eq!(kept, [0]); // only the 2026 row survives
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn prefilter<'a, K, I>(&'a self, candidates: I) -> impl Iterator<Item = K> + 'a
+    where
+        I: IntoIterator<Item = (K, Option<&'a Metadata>)>,
+        I::IntoIter: 'a,
+        K: 'a,
+    {
+        candidates
+            .into_iter()
+            .filter_map(move |(key, metadata)| self.evaluate(metadata).then_some(key))
+    }
+
+    /// Post-filter a stream of already-scored results: yield each hit whose
+    /// metadata matches, **after** the distance scan has ranked candidates.
+    ///
+    /// This is the [`FilterStrategy::PostFilter`](crate::FilterStrategy::PostFilter)
+    /// shape — score everything, then drop the hits the predicate rejects. It
+    /// shares the per-row test with [`prefilter`](Self::prefilter); the
+    /// difference is purely where in the pipeline it runs. Because it is lazy,
+    /// a caller refilling a top-`k` result set can chain `.take(k)` and stop as
+    /// soon as `k` survivors are found.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iqdb_filter::FilterEvaluator;
+    /// use iqdb_types::{Filter, Metadata, Value};
+    ///
+    /// # fn main() -> iqdb_types::Result<()> {
+    /// let evaluator = FilterEvaluator::new(Filter::eq("lang", Value::String("rust".into())))?;
+    ///
+    /// let rust: Metadata = [("lang".to_string(), Value::String("rust".into()))]
+    ///     .into_iter()
+    ///     .collect();
+    /// let go: Metadata = [("lang".to_string(), Value::String("go".into()))]
+    ///     .into_iter()
+    ///     .collect();
+    ///
+    /// // Hits arrive sorted by distance; keep the first matching one.
+    /// let scored = [("hit-a", Some(&go)), ("hit-b", Some(&rust))];
+    /// let best: Vec<&str> = evaluator.postfilter(scored).take(1).collect();
+    /// assert_eq!(best, ["hit-b"]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// [`prefilter`]: Self::prefilter
+    pub fn postfilter<'a, H, I>(&'a self, scored: I) -> impl Iterator<Item = H> + 'a
+    where
+        I: IntoIterator<Item = (H, Option<&'a Metadata>)>,
+        I::IntoIter: 'a,
+        H: 'a,
+    {
+        scored
+            .into_iter()
+            .filter_map(move |(hit, metadata)| self.evaluate(metadata).then_some(hit))
+    }
+
     /// Borrows the inner validated filter.
     ///
     /// Useful for adapters that want to introspect the predicate (for
@@ -295,5 +382,39 @@ mod tests {
         let copy = evaluator.clone();
         let meta: Metadata = [("k".to_string(), Value::Int(1))].into_iter().collect();
         assert_eq!(evaluator.evaluate(Some(&meta)), copy.evaluate(Some(&meta)));
+    }
+
+    fn meta(field: &str, value: Value) -> Metadata {
+        [(field.to_string(), value)].into_iter().collect()
+    }
+
+    #[test]
+    fn prefilter_keeps_only_matching_keys() {
+        let evaluator = FilterEvaluator::new(Filter::gt("year", Value::Int(2000))).unwrap();
+        let m2026 = meta("year", Value::Int(2026));
+        let m1999 = meta("year", Value::Int(1999));
+        let rows = [(10_usize, Some(&m2026)), (20, Some(&m1999)), (30, None)];
+
+        let kept: Vec<usize> = evaluator.prefilter(rows).collect();
+        assert_eq!(kept, [10]);
+    }
+
+    #[test]
+    fn postfilter_keeps_only_matching_hits_and_is_lazy() {
+        let evaluator =
+            FilterEvaluator::new(Filter::eq("lang", Value::String("rust".into()))).unwrap();
+        let rust = meta("lang", Value::String("rust".into()));
+        let go = meta("lang", Value::String("go".into()));
+        let scored = [("a", Some(&go)), ("b", Some(&rust)), ("c", Some(&rust))];
+
+        let first: Vec<&str> = evaluator.postfilter(scored).take(1).collect();
+        assert_eq!(first, ["b"]);
+    }
+
+    #[test]
+    fn prefilter_empty_input_yields_nothing() {
+        let evaluator = FilterEvaluator::new(Filter::eq("k", Value::Int(1))).unwrap();
+        let rows: [(usize, Option<&Metadata>); 0] = [];
+        assert_eq!(evaluator.prefilter(rows).count(), 0);
     }
 }

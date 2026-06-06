@@ -42,7 +42,8 @@
 - **Validate once, evaluate many** &mdash; `FilterEvaluator::new` checks the filter (depth, `In` cardinality) a single time; `evaluate` is then infallible and runs per-row inside the search loop
 - **Closed-world semantics** &mdash; a leaf over an absent field is `false`, type mismatches are `false`, `NaN` orderings are `false`, and `Not` of a `false` leaf is `true` (the "records without this field" idiom)
 - **DoS-hardened** &mdash; iterative validation that can't stack-overflow, with bounded depth and `In` width; the library never panics on adversarial input
-- **Strategy vocabulary** &mdash; the `FilterStrategy` enum names the pre-/post-/in-traversal shapes a future selector will choose between
+- **Scan helpers** &mdash; `prefilter` / `postfilter` apply the evaluator as lazy, allocation-free iterator adapters over a stream of `(key, metadata)` pairs
+- **Strategy selection** &mdash; a structural selectivity estimate drives an automatic `PreFilter` / `PostFilter` choice, with a tunable threshold
 - **First-party only** &mdash; depends solely on `iqdb-types`, so it is unblocked today
 
 <br>
@@ -51,7 +52,7 @@
 
 ```toml
 [dependencies]
-iqdb-filter = "0.2"
+iqdb-filter = "0.3"
 ```
 
 <br>
@@ -108,6 +109,30 @@ let err = FilterEvaluator::new(Filter::is_in("tag", huge)).unwrap_err();
 assert_eq!(err, IqdbError::InvalidFilter);
 ```
 
+Apply a strategy with the scan helpers, or let the selectivity estimate pick one:
+
+```rust
+use iqdb_filter::{FilterEvaluator, FilterStrategy, choose_strategy};
+use iqdb_types::{Filter, Metadata, Value};
+
+let evaluator = FilterEvaluator::new(Filter::eq("lang", Value::String("rust".into())))
+    .expect("valid filter");
+
+// `prefilter` keeps the keys of matching candidates, lazily, before scoring.
+let rust: Metadata = [("lang".to_string(), Value::String("rust".into()))]
+    .into_iter()
+    .collect();
+let go: Metadata = [("lang".to_string(), Value::String("go".into()))]
+    .into_iter()
+    .collect();
+let rows = [(0_usize, Some(&rust)), (1, Some(&go))];
+let kept: Vec<usize> = evaluator.prefilter(rows).collect();
+assert_eq!(kept, [0]);
+
+// An equality predicate is narrow, so the selector recommends pre-filtering.
+assert_eq!(choose_strategy(&evaluator), FilterStrategy::PreFilter);
+```
+
 <br>
 
 ## Errors
@@ -122,15 +147,17 @@ with no metadata, type mismatches, and `NaN` values.
 
 ## Status
 
-<code>v0.2.0</code> &mdash; the canonical evaluator has landed: `FilterEvaluator`
-(validate-on-construction plus an infallible, allocation-free per-row
-`evaluate`), the `FilterStrategy` vocabulary, and the public validation caps.
-The closed-world semantics are pinned by integration and property tests, and the
-surface is verified across the CI matrix (Linux, macOS, Windows) on stable and
-the 1.87 MSRV. Selectivity estimation, automatic strategy selection, and the
-optional inverted `MetadataIndex` are deferred until the first approximate-index
-consumer lands — see the <a href="./dev/ROADMAP.md"><code>ROADMAP</code></a> for
-the rationale. The full surface is documented in <a href="./docs/API.md"><code>docs/API.md</code></a>.
+<code>v0.3.0</code> &mdash; the evaluator plus strategy selection. On top of the
+canonical `FilterEvaluator` (validate-on-construction, infallible allocation-free
+per-row `evaluate`), this release adds the `prefilter` / `postfilter` scan
+helpers, a structural `estimate_selectivity`, and a tunable selector
+(`choose_strategy` / `StrategySelector`) that resolves `PreFilter` vs
+`PostFilter`. Semantics and the new surface are pinned by unit, integration, and
+property tests, verified across the CI matrix (Linux, macOS, Windows) on stable
+and the 1.87 MSRV. The optional inverted `MetadataIndex`, index-backed
+selectivity, and `InFilter` pushdown remain deferred until the first
+approximate-index consumer lands — see the <a href="./dev/ROADMAP.md"><code>ROADMAP</code></a>
+for the rationale. The full surface is documented in <a href="./docs/API.md"><code>docs/API.md</code></a>.
 
 <hr>
 <br>

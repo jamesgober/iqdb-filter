@@ -33,12 +33,36 @@ means, shared by every consumer so the semantics cannot drift.
 - [x] `criterion` bench on the validation and evaluation paths.
 
 **Deferral recorded (anti-deferral rule).** The original plan paired the
-evaluator with a *selectivity estimate* in this phase. The estimate is moved
-out to the strategy-selection phase below, because a selectivity number has no
-honest source until the inverted `MetadataIndex` exists, and that index has no
-consumer until an approximate index honours filters. A placeholder estimate
-("0.5 always") would be worse than none -- it would teach a future selector to
-make confident wrong choices. Documented, deferred, not stubbed.
+evaluator with a *selectivity estimate* in this phase. It moved to v0.3.0
+below, because bundling it with the evaluator added surface no consumer
+exercised yet. A placeholder estimate ("0.5 always") would have been worse than
+none -- it would teach a selector to make confident wrong choices.
+
+---
+
+## v0.3.0 -- Strategy selection (DONE)
+
+The `FilterStrategy` vocabulary becomes actionable, without an inverted index.
+
+- [x] `FilterEvaluator::prefilter` / `postfilter` -- lazy, allocation-free scan
+      adapters over `(key, metadata)` pairs, realising the `PreFilter` /
+      `PostFilter` shapes. Shaped to the real `iqdb-flat` consumption pattern.
+- [x] `estimate_selectivity(&FilterEvaluator) -> f64` -- a **structural**
+      estimate (filter shape only, no data) in `[0.0, 1.0]`. Takes a validated
+      evaluator, so the walk is depth-bounded.
+- [x] `choose_strategy` (Tier 1) + `StrategySelector` (Tier 2, tunable
+      `prefilter_threshold`, immutable builder) resolving `PreFilter` /
+      `PostFilter`; `DEFAULT_PREFILTER_THRESHOLD = 0.5`.
+- [x] New surface property-tested (selectivity is always a probability;
+      `prefilter` matches the manual filter; the selector never yields
+      `Auto` / `InFilter`) and benchmarked.
+
+**Scope note (anti-deferral rule).** The selectivity estimate here is
+deliberately *structural*. An **index-backed** estimate (histograms / sketches)
+and the inverted `MetadataIndex` it reads stay deferred below -- the threshold
+the selector compares against is tunable precisely because the structural
+estimate is coarse. This is the "pre/post + heuristic auto" scope, chosen over
+building speculative index machinery with no consumer.
 
 ---
 
@@ -57,18 +81,14 @@ opt-in (indexing every field inflates resident memory and write amplification),
 and gated on a string-cap policy in `iqdb-types` for the unbounded metadata
 surface.
 
-### Selectivity estimate
+### Index-backed selectivity estimate
 
-`selectivity_estimate(&Filter, &MetadataIndex) -> f64` in `[0.0, 1.0]`, a
-best-effort cardinality estimate the selector may ignore. Real sources only
-exist once the index does: per-field histograms for ordered domains,
-sketches (HyperLogLog / count-min) for high-cardinality and membership domains.
-
-### Strategy auto-selection
-
-Given a filter and an estimate, pick `FilterStrategy::{PreFilter, PostFilter,
-InFilter}`. The decision threshold is non-obvious and workload-dependent;
-choosing it without a real workload would bake in the wrong number.
+A data-driven upgrade to the structural `estimate_selectivity` shipped in
+v0.3.0: `selectivity_estimate(&Filter, &MetadataIndex) -> f64` reading real
+sources -- per-field histograms for ordered domains, sketches (HyperLogLog /
+count-min) for high-cardinality and membership domains. Only worth building once
+the `MetadataIndex` above exists; until then the structural estimate plus a
+tunable threshold is the honest surface.
 
 ### Filter pushdown into graph traversal
 
@@ -81,9 +101,11 @@ approximate index's recall guarantees.
 
 ## Toward 1.0
 
-- **Strategy phase** -- the four deferred items above, in order, each with
-  tests and benchmarks where it is a hot path. Feature freeze declared at the
-  end (no `todo!` / `unimplemented!`).
+- **Index phase** -- the deferred items above (inverted `MetadataIndex`,
+  index-backed selectivity, `InFilter` pushdown), in order, each with tests and
+  benchmarks where it is a hot path, once a real approximate-index consumer
+  drives them. Feature freeze declared at the end (no `todo!` /
+  `unimplemented!`).
 - **API freeze** -- public API frozen and recorded here; `cargo audit` +
   `cargo deny` clean.
 - **Alpha / Beta / RC (0.6.x -> 0.9.x)** -- integrate against real consumers

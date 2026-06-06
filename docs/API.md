@@ -1,7 +1,7 @@
 # iqdb-filter &mdash; API Reference
 
 > Complete reference for **every** public item in `iqdb-filter` as of
-> **v0.2.0**: what it is, its parameters and return shape, and worked examples
+> **v0.3.0**: what it is, its parameters and return shape, and worked examples
 > for each use case.
 >
 > **Status: pre-1.0.** The public API is being designed across the 0.x series
@@ -15,12 +15,20 @@
   - [`VERSION`](#version)
   - [`MAX_FILTER_DEPTH`](#max_filter_depth)
   - [`MAX_IN_VALUES`](#max_in_values)
+  - [`DEFAULT_PREFILTER_THRESHOLD`](#default_prefilter_threshold)
 - [Evaluating a filter](#evaluating-a-filter)
   - [`FilterEvaluator`](#filterevaluator)
   - [`FilterEvaluator::new`](#filterevaluatornew)
   - [`FilterEvaluator::evaluate`](#filterevaluatorevaluate)
   - [`FilterEvaluator::filter`](#filterevaluatorfilter)
 - [Evaluation semantics](#evaluation-semantics)
+- [Applying a strategy: scan helpers](#applying-a-strategy-scan-helpers)
+  - [`FilterEvaluator::prefilter`](#filterevaluatorprefilter)
+  - [`FilterEvaluator::postfilter`](#filterevaluatorpostfilter)
+- [Selectivity &amp; strategy selection](#selectivity--strategy-selection)
+  - [`estimate_selectivity`](#estimate_selectivity)
+  - [`choose_strategy`](#choose_strategy)
+  - [`StrategySelector`](#strategyselector)
 - [`FilterStrategy`](#filterstrategy)
 - [Errors](#errors)
 - [Feature flags](#feature-flags)
@@ -112,6 +120,22 @@ service, while still covering realistic "tag in this set" queries.
 
 ```rust
 assert!(iqdb_filter::MAX_IN_VALUES >= 256);
+```
+
+### `DEFAULT_PREFILTER_THRESHOLD`
+
+```rust
+pub const DEFAULT_PREFILTER_THRESHOLD: f64; // = 0.5
+```
+
+The selectivity cutoff [`choose_strategy`](#choose_strategy) and a default
+[`StrategySelector`](#strategyselector) use to split `PreFilter` from
+`PostFilter`: a filter whose estimated selectivity is at or below this value is
+treated as narrow enough to pre-filter. Tune it per index with
+[`StrategySelector::with_prefilter_threshold`](#strategyselector).
+
+```rust
+assert_eq!(iqdb_filter::DEFAULT_PREFILTER_THRESHOLD, 0.5);
 ```
 
 ---
@@ -266,6 +290,150 @@ assert!(not_eq.evaluate(None));
 
 ---
 
+## Applying a strategy: scan helpers
+
+Both helpers are lazy, allocation-free iterator adapters over a stream of
+`(key, Option<&Metadata>)` pairs. They share the per-row test ([`evaluate`](#filterevaluatorevaluate));
+the difference is purely where in a search pipeline they run.
+
+### `FilterEvaluator::prefilter`
+
+```rust
+pub fn prefilter<'a, K, I>(&'a self, candidates: I) -> impl Iterator<Item = K> + 'a
+where
+    I: IntoIterator<Item = (K, Option<&'a Metadata>)>,
+    I::IntoIter: 'a,
+    K: 'a;
+```
+
+Yields the `key` of each candidate whose metadata matches, **before** scoring —
+the [`PreFilter`](#filterstrategy) shape. `key` is whatever identifies a row (a
+storage index, a `VectorId`, a tuple). This is the pattern an exact index uses
+to skip the distance computation for rejected rows.
+
+```rust
+use iqdb_filter::FilterEvaluator;
+use iqdb_types::{Filter, Metadata, Value};
+
+let evaluator = FilterEvaluator::new(Filter::gt("year", Value::Int(2000))).expect("valid");
+
+let a: Metadata = [("year".to_string(), Value::Int(2026))].into_iter().collect();
+let b: Metadata = [("year".to_string(), Value::Int(1999))].into_iter().collect();
+let rows = [(0_usize, Some(&a)), (1, Some(&b)), (2, None)];
+
+let kept: Vec<usize> = evaluator.prefilter(rows).collect();
+assert_eq!(kept, [0]);
+```
+
+### `FilterEvaluator::postfilter`
+
+```rust
+pub fn postfilter<'a, H, I>(&'a self, scored: I) -> impl Iterator<Item = H> + 'a
+where
+    I: IntoIterator<Item = (H, Option<&'a Metadata>)>,
+    I::IntoIter: 'a,
+    H: 'a;
+```
+
+Yields each already-scored hit whose metadata matches, **after** the distance
+scan — the [`PostFilter`](#filterstrategy) shape. Because it is lazy, a caller
+refilling a top-`k` result set can chain `.take(k)` and stop as soon as `k`
+survivors are found.
+
+```rust
+use iqdb_filter::FilterEvaluator;
+use iqdb_types::{Filter, Metadata, Value};
+
+let evaluator = FilterEvaluator::new(Filter::eq("lang", Value::String("rust".into())))
+    .expect("valid");
+
+let rust: Metadata = [("lang".to_string(), Value::String("rust".into()))].into_iter().collect();
+let go: Metadata = [("lang".to_string(), Value::String("go".into()))].into_iter().collect();
+
+// Hits arrive sorted by distance; keep the first match.
+let scored = [("a", Some(&go)), ("b", Some(&rust))];
+let best: Vec<&str> = evaluator.postfilter(scored).take(1).collect();
+assert_eq!(best, ["b"]);
+```
+
+---
+
+## Selectivity &amp; strategy selection
+
+### `estimate_selectivity`
+
+```rust
+pub fn estimate_selectivity(evaluator: &FilterEvaluator) -> f64;
+```
+
+A best-effort, **structural** estimate of the fraction of records a filter
+passes, in `[0.0, 1.0]` — derived from the filter tree, not from any data. Each
+leaf has a base rate (equality narrow, ranges wider, `Neq` broad), combined
+through the boolean operators (`And` multiplies, `Or` unions, `Not`
+complements). Use it to rank a predicate as narrow or broad; do not treat it as
+an exact probability. It takes a validated `FilterEvaluator`, so the walk is
+depth-bounded and cannot overflow.
+
+```rust
+use iqdb_filter::{FilterEvaluator, estimate_selectivity};
+use iqdb_types::{Filter, Value};
+
+let eq = FilterEvaluator::new(Filter::eq("status", Value::Int(1))).expect("valid");
+let neq = FilterEvaluator::new(Filter::neq("status", Value::Int(1))).expect("valid");
+
+assert!(estimate_selectivity(&eq) < estimate_selectivity(&neq));
+assert!((0.0..=1.0).contains(&estimate_selectivity(&eq)));
+```
+
+### `choose_strategy`
+
+```rust
+pub fn choose_strategy(evaluator: &FilterEvaluator) -> FilterStrategy;
+```
+
+The Tier-1 shortcut: resolves a concrete [`FilterStrategy`](#filterstrategy)
+using the [`DEFAULT_PREFILTER_THRESHOLD`](#default_prefilter_threshold) — returns
+`PreFilter` for narrow predicates and `PostFilter` for broad ones. Never returns
+`Auto` or `InFilter`.
+
+```rust
+use iqdb_filter::{FilterEvaluator, FilterStrategy, choose_strategy};
+use iqdb_types::{Filter, Value};
+
+let evaluator = FilterEvaluator::new(Filter::eq("k", Value::Int(1))).expect("valid");
+assert_eq!(choose_strategy(&evaluator), FilterStrategy::PreFilter);
+```
+
+### `StrategySelector`
+
+```rust
+#[derive(Debug, Clone, Copy)]
+pub struct StrategySelector { /* private */ }
+
+impl StrategySelector {
+    pub fn new() -> Self;                                       // DEFAULT_PREFILTER_THRESHOLD
+    pub fn with_prefilter_threshold(self, threshold: f64) -> Self; // clamped to [0.0, 1.0]
+    pub fn prefilter_threshold(&self) -> f64;
+    pub fn choose(&self, evaluator: &FilterEvaluator) -> FilterStrategy;
+}
+```
+
+The Tier-2, tunable counterpart to [`choose_strategy`](#choose_strategy). The
+type is immutable — `with_prefilter_threshold` returns a new selector. `choose`
+returns `PreFilter` when the estimate is at or below the threshold, `PostFilter`
+otherwise. An out-of-range threshold is clamped, never a panic.
+
+```rust
+use iqdb_filter::{FilterEvaluator, FilterStrategy, StrategySelector};
+use iqdb_types::{Filter, Value};
+
+let selector = StrategySelector::new().with_prefilter_threshold(1.0); // always pre-filter
+let broad = FilterEvaluator::new(Filter::neq("id", Value::Int(7))).expect("valid");
+assert_eq!(selector.choose(&broad), FilterStrategy::PreFilter);
+```
+
+---
+
 ## `FilterStrategy`
 
 ```rust
@@ -280,17 +448,17 @@ pub enum FilterStrategy {
 ```
 
 Vocabulary for how an index applies a metadata filter relative to its distance
-scan. **v0.2 ships the variants only** — there is no selector yet; every
-consumer applies pre-filtering through [`FilterEvaluator`](#filterevaluator) and
-ignores this enum. It exists so `MetadataIndex`-driven indexes can adopt it
-without a breaking change.
+scan. `PreFilter` and `PostFilter` are realised by the scan helpers
+([`prefilter`](#filterevaluatorprefilter) / [`postfilter`](#filterevaluatorpostfilter))
+and chosen by the selector ([`choose_strategy`](#choose_strategy) /
+[`StrategySelector`](#strategyselector)).
 
 | Variant | Meaning |
 |---------|---------|
-| `PreFilter` | Apply the predicate **before** the distance computation; only matching candidates enter the scan. Cheap when selective. |
-| `PostFilter` | Run the distance scan over every candidate, then drop hits that fail the predicate. Cheap when the predicate is broad. |
+| `PreFilter` | Apply the predicate **before** the distance computation; only matching candidates enter the scan. Cheap when selective. Realised by [`prefilter`](#filterevaluatorprefilter). |
+| `PostFilter` | Run the distance scan over every candidate, then drop hits that fail the predicate. Cheap when the predicate is broad. Realised by [`postfilter`](#filterevaluatorpostfilter). |
 | `InFilter` | Interleave predicate evaluation with the distance walk so a graph index can prune branches. _(planned: requires `MetadataIndex` co-design.)_ |
-| `Auto` | Let the index pick from the above based on estimated selectivity. _(planned: requires the selectivity machinery.)_ |
+| `Auto` | Let the index pick from the above based on estimated selectivity. The selector resolves this to `PreFilter` / `PostFilter`. |
 
 `#[non_exhaustive]`: do not match it exhaustively or assume the variant set is
 closed.
@@ -330,10 +498,11 @@ re-walk the filter or pre-check against the public caps.
 
 ## Trait implementation matrix
 
-| Type | `Debug` | `Clone` | `Copy` | `PartialEq` / `Eq` | `Hash` |
-|------|:-------:|:-------:|:------:|:------------------:|:------:|
-| `FilterEvaluator` | ✓ | ✓ | | | |
-| `FilterStrategy` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Type | `Debug` | `Clone` | `Copy` | `PartialEq` / `Eq` | `Hash` | `Default` |
+|------|:-------:|:-------:|:------:|:------------------:|:------:|:---------:|
+| `FilterEvaluator` | ✓ | ✓ | | | | |
+| `FilterStrategy` | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| `StrategySelector` | ✓ | ✓ | ✓ | | | ✓ |
 
 ---
 

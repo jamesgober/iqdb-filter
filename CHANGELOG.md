@@ -18,6 +18,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [0.5.0] - 2026-06-05
+
+Hardening and API freeze. No new public surface — this release proves the
+existing one is sufficient and robust, then commits to it.
+
+### Added
+
+- Consumer-simulation suite (`tests/consumer_simulation.rs`): a filtered top-`k`
+  searcher built **only** on the public API (`MetadataIndex` + `candidates` +
+  `evaluate` + `prefilter` / `postfilter` + the selector), asserting the
+  index-accelerated path returns exactly what an unindexed full scan does for
+  every filter shape.
+- Fuzz targets (`fuzz/`): `robustness` (the validator and evaluator never panic
+  on arbitrary filters/metadata) and `superset` (the `MetadataIndex` superset
+  contract holds on unbounded input). Wired into the CI `fuzz` job.
+
+### Changed
+
+- **Public API frozen.** The surface is committed: only additive (MINOR)
+  changes until 2.0 (`InFilter` pushdown, if it lands, is additive). The frozen
+  surface is recorded in `dev/ROADMAP.md`.
+
+---
+
 ## [0.4.0] - 2026-06-05
 
 Inverted metadata index. A selective `Eq` / `In` predicate can now resolve to a
@@ -131,7 +155,8 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `REPS.md` compliance baseline.
 - `.github/workflows/ci.yml` CI matrix; `deny.toml`, `clippy.toml`, `rustfmt.toml`.
 - `dev/DIRECTIVES.md` and `dev/ROADMAP.md` (committed engineering standards + plan).
-[Unreleased]: https://github.com/jamesgober/iqdb-filter/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jamesgober/iqdb-filter/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jamesgober/iqdb-filter/compare/v0.1.0...v0.2.0

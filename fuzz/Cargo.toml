@@ -1,0 +1,42 @@
+[package]
+name        = "iqdb-filter-fuzz"
+version     = "0.0.0"
+edition     = "2024"
+publish     = false
+description = "Cargo-fuzz targets for iqdb-filter: no-panic robustness of the validator/evaluator and the MetadataIndex superset contract. Requires a nightly toolchain via cargo-fuzz (see README.md)."
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary     = { version = "1", features = ["derive"] }
+
+iqdb-types    = "1.0.0"
+iqdb-filter   = { path = ".." }
+
+[lib]
+name = "iqdb_filter_fuzz"
+path = "src/lib.rs"
+
+# No-panic robustness: validation + evaluation on arbitrary filters/metadata.
+[[bin]]
+name    = "robustness"
+path    = "fuzz_targets/robustness.rs"
+test    = false
+doc     = false
+bench   = false
+doctest = false
+
+# The MetadataIndex superset contract on arbitrary indexes and filters.
+[[bin]]
+name    = "superset"
+path    = "fuzz_targets/superset.rs"
+test    = false
+doc     = false
+bench   = false
+doctest = false
+
+# Isolate the fuzz crate as its own workspace root so it never gets pulled into
+# a parent build (the cargo-fuzz convention).
+[workspace]

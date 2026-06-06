@@ -91,6 +91,39 @@ index is hardened for hostile, high-cardinality input.
 
 ---
 
+## v0.5.0 -- Hardening & API freeze (DONE)
+
+No new public surface; prove the existing one is sufficient and robust, then
+commit to it.
+
+- [x] Consumer-simulation suite -- a filtered top-`k` searcher built only on the
+      public API, asserting the index-accelerated path equals a full scan for
+      every filter shape.
+- [x] Fuzz targets (`fuzz/`): `robustness` (validator/evaluator never panic) and
+      `superset` (the index contract holds on unbounded input). Wired into CI.
+- [x] **Public API frozen** (recorded below). Only additive (MINOR) changes
+      until 2.0.
+
+### Frozen public surface (v0.5.0)
+
+- Types: `FilterEvaluator`, `FilterStrategy`, `StrategySelector`,
+  `MetadataIndex<K>`.
+- Consts: `MAX_FILTER_DEPTH`, `MAX_IN_VALUES`, `DEFAULT_PREFILTER_THRESHOLD`,
+  `VERSION`.
+- Functions: `estimate_selectivity`, `choose_strategy`.
+- `FilterEvaluator`: `new`, `evaluate`, `filter`, `prefilter`, `postfilter`.
+- `StrategySelector`: `new`, `with_prefilter_threshold`, `prefilter_threshold`,
+  `choose`, `choose_with_index`.
+- `MetadataIndex`: `build`, `candidates`, `estimate_selectivity`, `len`,
+  `is_empty`, `is_indexed`, `indexed_fields`.
+
+Additive-only seams kept open for the deferred work: `FilterStrategy` is
+`#[non_exhaustive]` (so `InFilter` pushdown needs no new variant), and the
+selectivity / candidate surfaces are separate functions (so an index-backed or
+pushdown path is a new method, never a signature change).
+
+---
+
 ## Deferred until the first approximate-index consumer
 
 What remains needs a real approximate index (`iqdb-hnsw` / `iqdb-ivf`) honouring
@@ -107,17 +140,15 @@ approximate index's recall guarantees.
 
 ## Toward 1.0
 
-- **Pushdown phase** -- the one deferred item above (`InFilter` pushdown into
-  graph traversal), once a real approximate-index consumer drives it, with tests
-  and benchmarks. `MetadataIndex` hardening (the `iqdb-types` string-cap policy)
-  lands here too. Feature freeze declared at the end (no `todo!` /
-  `unimplemented!`).
-- **API freeze** -- public API frozen and recorded here; `cargo audit` +
-  `cargo deny` clean.
-- **Alpha / Beta / RC (0.6.x -> 0.9.x)** -- integrate against real consumers
-  (MINOR-compatible additions only), broaden testing, final benchmarks, doc
-  polish. Note: per SemVer, additive items like `InFilter` pushdown can also
-  ship post-1.0 in a MINOR release without waiting.
+- **API freeze** -- done in v0.5.0 (frozen surface recorded above);
+  `cargo audit` + `cargo deny` clean.
+- **RC (0.6.x -> 0.9.x)** -- integrate against the first real consumer
+  (`iqdb-flat`), MINOR-compatible additions only, final benchmarks, doc polish.
+  This is the remaining gate to 1.0: the API is frozen and hardened, so what's
+  left is soak time against a live consumer.
+- **`InFilter` pushdown** -- the one deferred feature, built when an approximate
+  index drives it. Additive (`FilterStrategy` is `#[non_exhaustive]`), so per
+  SemVer it can ship pre- or post-1.0 in a MINOR release without waiting.
 
 ## v1.0.0 -- Stable
 

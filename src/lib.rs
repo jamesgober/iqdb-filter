@@ -1,6 +1,6 @@
 //! # iqdb-filter
 //!
-//! Canonical [`iqdb_types::Filter`] evaluator for the HiveDB **iqdb**
+//! Canonical [`iqdb_types::Filter`] evaluator for the **iqdb**
 //! vector-database spine. One place that decides what `Filter` means; every
 //! index that supports metadata filtering delegates to it.
 //!

@@ -16,10 +16,13 @@
   - [`VERSION`](#version)
   - [`MAX_FILTER_DEPTH`](#max_filter_depth)
   - [`MAX_IN_VALUES`](#max_in_values)
+  - [`MAX_FILTER_NODES`](#max_filter_nodes)
+  - [`MAX_FILTER_VALUES`](#max_filter_values)
   - [`DEFAULT_PREFILTER_THRESHOLD`](#default_prefilter_threshold)
 - [Evaluating a filter](#evaluating-a-filter)
   - [`FilterEvaluator`](#filterevaluator)
   - [`FilterEvaluator::new`](#filterevaluatornew)
+  - [`FilterEvaluator::try_from(&Filter)`](#filterevaluatortry_fromfilter)
   - [`FilterEvaluator::evaluate`](#filterevaluatorevaluate)
   - [`FilterEvaluator::filter`](#filterevaluatorfilter)
 - [Evaluation semantics](#evaluation-semantics)
@@ -129,6 +132,35 @@ service, while still covering realistic "tag in this set" queries.
 assert!(iqdb_filter::MAX_IN_VALUES >= 256);
 ```
 
+### `MAX_FILTER_NODES`
+
+```rust
+pub const MAX_FILTER_NODES: usize; // = 4096
+```
+
+The maximum total number of nodes (leaves plus `And` / `Or` / `Not`) in one
+filter. The depth and per-`In` caps alone do not bound the cost of a filter:
+an `And` may hold any number of children, and every child is evaluated for
+every record. Together with [`MAX_FILTER_VALUES`](#max_filter_values) this
+bounds the per-record work.
+
+```rust
+assert!(iqdb_filter::MAX_FILTER_NODES >= 1024);
+```
+
+### `MAX_FILTER_VALUES`
+
+```rust
+pub const MAX_FILTER_VALUES: usize; // = 16_384
+```
+
+The maximum total number of values across every `Filter::In` node of one
+filter, so many wide `In` nodes cannot multiply the per-record cost.
+
+```rust
+assert!(iqdb_filter::MAX_FILTER_VALUES >= iqdb_filter::MAX_IN_VALUES);
+```
+
 ### `DEFAULT_PREFILTER_THRESHOLD`
 
 ```rust
@@ -157,8 +189,9 @@ pub struct FilterEvaluator { /* private */ }
 
 A validated [`iqdb_types::Filter`] paired with the canonical evaluator. Build
 one with [`new`](#filterevaluatornew); the filter is walked once at construction
-to enforce [`MAX_FILTER_DEPTH`](#max_filter_depth) and
-[`MAX_IN_VALUES`](#max_in_values). After that,
+to enforce [`MAX_FILTER_DEPTH`](#max_filter_depth),
+[`MAX_IN_VALUES`](#max_in_values), [`MAX_FILTER_NODES`](#max_filter_nodes) and
+[`MAX_FILTER_VALUES`](#max_filter_values). After that,
 [`evaluate`](#filterevaluatorevaluate) is infallible and may be called per row
 without revalidation.
 
@@ -175,13 +208,16 @@ Validates `filter` and wraps it for evaluation.
 - **`filter`** — the [`iqdb_types::Filter`] to validate and own.
 - **Returns** — `Ok(FilterEvaluator)` on a well-formed filter, or
   `Err(`[`IqdbError::InvalidFilter`](#errors)`)` when the filter's nested-boolean
-  depth exceeds [`MAX_FILTER_DEPTH`](#max_filter_depth) **or** any
+  depth exceeds [`MAX_FILTER_DEPTH`](#max_filter_depth), any
   [`Filter::In`] node carries more than [`MAX_IN_VALUES`](#max_in_values)
-  values.
+  values, the filter has more than [`MAX_FILTER_NODES`](#max_filter_nodes)
+  nodes, **or** its `In` nodes carry more than
+  [`MAX_FILTER_VALUES`](#max_filter_values) values in total.
 
 The validation walk is **iterative** (an explicit work-list, not recursion), so
 `new` itself cannot stack-overflow on a pathological input — even a filter
-nested far past the cap returns a clean `Err`.
+nested far past the cap returns a clean `Err`. The walk stops at the first
+violation, so rejecting an oversized filter costs no more than the caps.
 
 ```rust
 use iqdb_filter::{FilterEvaluator, MAX_IN_VALUES};
@@ -194,6 +230,26 @@ assert!(FilterEvaluator::new(Filter::eq("k", Value::Int(1))).is_ok());
 let huge = vec![Value::Int(0); MAX_IN_VALUES + 1];
 let err = FilterEvaluator::new(Filter::is_in("tag", huge)).unwrap_err();
 assert_eq!(err, IqdbError::InvalidFilter);
+```
+
+### `FilterEvaluator::try_from(&Filter)`
+
+```rust
+impl TryFrom<&Filter> for FilterEvaluator { type Error = IqdbError; /* ... */ }
+```
+
+Validates a borrowed filter with the same caps and errors as
+[`new`](#filterevaluatornew), and clones it only once it passes. Use it when
+the filter belongs to someone else (for example `SearchParams::filter`), so an
+oversized one is rejected without being copied first.
+
+```rust
+use iqdb_filter::FilterEvaluator;
+use iqdb_types::{Filter, Value};
+
+let filter = Filter::eq("k", Value::Int(1));
+let evaluator = FilterEvaluator::try_from(&filter).unwrap();
+assert_eq!(evaluator.filter(), &filter);
 ```
 
 ### `FilterEvaluator::evaluate`

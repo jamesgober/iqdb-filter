@@ -8,13 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+Planned as 1.1.0.
+
 ### Added
 
-### Changed
-
-### Fixed
+- `MAX_FILTER_NODES` (4096) and `MAX_FILTER_VALUES` (16,384), caps on the
+  total size of one filter, enforced by `FilterEvaluator::new`.
+- `impl TryFrom<&Filter> for FilterEvaluator`, which validates a borrowed
+  filter and clones it only once it passes.
 
 ### Security
+
+- The depth and per-`In` caps did not bound the cost of a filter: an `And`
+  could hold any number of children, each evaluated for every record, so
+  one filter of `In` nodes could cost about 10^8 comparisons per record.
+  Validation now also rejects a filter with more than `MAX_FILTER_NODES`
+  nodes or more than `MAX_FILTER_VALUES` `In` values in total, checking
+  each `And` / `Or` width before walking its children.
 
 ---
 

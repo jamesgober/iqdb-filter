@@ -33,7 +33,8 @@
 //! - [`FilterStrategy`] — vocabulary for how an index applies a filter
 //!   relative to its distance scan. The selector resolves `Auto` down to
 //!   `PreFilter` / `PostFilter`; `InFilter` waits on a graph-index consumer.
-//! - [`MAX_FILTER_DEPTH`] / [`MAX_IN_VALUES`] — documented validation caps,
+//! - [`MAX_FILTER_DEPTH`] / [`MAX_IN_VALUES`] / [`MAX_FILTER_NODES`] /
+//!   [`MAX_FILTER_VALUES`] — documented validation caps,
 //!   `pub const` so callers can quote them in error messages or higher-level
 //!   validation.
 //!
@@ -109,7 +110,9 @@ mod index;
 mod selectivity;
 mod strategy;
 
-pub use crate::evaluator::{FilterEvaluator, MAX_FILTER_DEPTH, MAX_IN_VALUES};
+pub use crate::evaluator::{
+    FilterEvaluator, MAX_FILTER_DEPTH, MAX_FILTER_NODES, MAX_FILTER_VALUES, MAX_IN_VALUES,
+};
 pub use crate::index::MetadataIndex;
 pub use crate::selectivity::estimate_selectivity;
 pub use crate::strategy::{

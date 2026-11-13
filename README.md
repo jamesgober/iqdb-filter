@@ -39,9 +39,9 @@
 <h2>What it does</h2>
 
 - **Canonical evaluator** &mdash; one implementation of `Filter` semantics, shared by every metadata-aware index so query results never diverge
-- **Validate once, evaluate many** &mdash; `FilterEvaluator::new` checks the filter (depth, `In` cardinality) a single time; `evaluate` is then infallible and runs per-row inside the search loop
+- **Validate once, evaluate many** &mdash; `FilterEvaluator::new` checks the filter (depth, `In` cardinality, total size) a single time; `evaluate` is then infallible and runs per-row inside the search loop
 - **Closed-world semantics** &mdash; a leaf over an absent field is `false`, type mismatches are `false`, `NaN` orderings are `false`, and `Not` of a `false` leaf is `true` (the "records without this field" idiom)
-- **DoS-hardened** &mdash; iterative validation that can't stack-overflow, with bounded depth and `In` width; the library never panics on adversarial input
+- **DoS-hardened** &mdash; iterative validation that can't stack-overflow, with bounded depth, `In` width, and total node and value counts; the library never panics on adversarial input
 - **Scan helpers** &mdash; `prefilter` / `postfilter` apply the evaluator as lazy, allocation-free iterator adapters over a stream of `(key, metadata)` pairs
 - **Strategy selection** &mdash; a selectivity estimate drives an automatic `PreFilter` / `PostFilter` choice, with a tunable threshold
 - **Inverted index** &mdash; an opt-in, per-field `MetadataIndex` resolves selective `Eq` / `In` predicates to a candidate set (a superset of true matches) and backs a sharper, count-based selectivity estimate
@@ -167,7 +167,8 @@ assert_eq!(hits, [0, 2]);
 
 `FilterEvaluator::new` returns `iqdb_types::Result`; the only failure is
 `IqdbError::InvalidFilter`, returned when a filter exceeds `MAX_FILTER_DEPTH`
-nesting or carries an `In` node wider than `MAX_IN_VALUES`. After a filter is
+nesting, carries an `In` node wider than `MAX_IN_VALUES`, or is larger in total
+than `MAX_FILTER_NODES` nodes or `MAX_FILTER_VALUES` `In` values. After a filter is
 validated, `evaluate` is infallible and never panics — including on records
 with no metadata, type mismatches, and `NaN` values.
 
@@ -175,7 +176,7 @@ with no metadata, type mismatches, and `NaN` values.
 
 ## Status
 
-<code>v1.0.0</code> &mdash; **stable.** The full surface — the canonical
+<code>v1.1.0</code> &mdash; **stable.** The full surface — the canonical
 `FilterEvaluator` (validate-on-construction, infallible allocation-free per-row
 `evaluate`), the `prefilter` / `postfilter` scan helpers, `estimate_selectivity`
 + the selector (`choose_strategy` / `StrategySelector`), and the opt-in per-field

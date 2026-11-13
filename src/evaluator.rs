@@ -1,10 +1,11 @@
 //! [`FilterEvaluator`] — the public, validated face of the evaluator.
 //!
 //! Construction is the validation gate. After [`FilterEvaluator::new`]
-//! returns `Ok`, the filter is known to satisfy the depth and `In`-cardinality
-//! caps documented on [`MAX_FILTER_DEPTH`] and [`MAX_IN_VALUES`], and the
-//! recursive [`FilterEvaluator::evaluate`] hot path can run without checking
-//! either bound again.
+//! returns `Ok`, the filter is known to satisfy the depth, `In`-cardinality
+//! and total-size caps documented on [`MAX_FILTER_DEPTH`], [`MAX_IN_VALUES`],
+//! [`MAX_FILTER_NODES`] and [`MAX_FILTER_VALUES`], and the recursive
+//! [`FilterEvaluator::evaluate`] hot path can run without checking any bound
+//! again.
 
 use iqdb_types::{Filter, IqdbError, Metadata, Result};
 
@@ -49,10 +50,41 @@ pub const MAX_FILTER_DEPTH: usize = 64;
 /// ```
 pub const MAX_IN_VALUES: usize = 1024;
 
+/// Maximum total number of nodes (leaves plus `And`/`Or`/`Not`) in a
+/// [`Filter`] passed to [`FilterEvaluator::new`].
+///
+/// The depth and per-`In` caps alone do not bound the cost of a filter: an
+/// `And` may hold any number of children, each evaluated for every record.
+/// This cap bounds the per-record work together with
+/// [`MAX_FILTER_VALUES`]. `4096` is far beyond any realistic query. Filters
+/// that exceed it are rejected with [`IqdbError::InvalidFilter`].
+///
+/// # Examples
+///
+/// ```
+/// assert!(iqdb_filter::MAX_FILTER_NODES >= 1024);
+/// ```
+pub const MAX_FILTER_NODES: usize = 4096;
+
+/// Maximum total number of values across every [`Filter::In`] node of one
+/// [`Filter`] passed to [`FilterEvaluator::new`].
+///
+/// Each `In` is already capped at [`MAX_IN_VALUES`]; this caps their sum,
+/// so many wide `In` nodes cannot multiply the per-record cost. Filters
+/// that exceed it are rejected with [`IqdbError::InvalidFilter`].
+///
+/// # Examples
+///
+/// ```
+/// assert!(iqdb_filter::MAX_FILTER_VALUES >= iqdb_filter::MAX_IN_VALUES);
+/// ```
+pub const MAX_FILTER_VALUES: usize = 16_384;
+
 /// A validated [`Filter`] paired with the canonical evaluator.
 ///
 /// Build one with [`FilterEvaluator::new`]; the filter is walked once at
-/// construction to enforce [`MAX_FILTER_DEPTH`] and [`MAX_IN_VALUES`]. After
+/// construction to enforce [`MAX_FILTER_DEPTH`], [`MAX_IN_VALUES`],
+/// [`MAX_FILTER_NODES`] and [`MAX_FILTER_VALUES`]. After
 /// that, [`FilterEvaluator::evaluate`] is infallible and may be called per
 /// row inside a search loop without revalidation.
 ///
@@ -85,12 +117,19 @@ impl FilterEvaluator {
     /// recursion — so `new` itself cannot stack-overflow on a pathological
     /// input. It returns [`IqdbError::InvalidFilter`] when:
     ///
-    /// - the filter's nested-boolean depth exceeds [`MAX_FILTER_DEPTH`]; or
-    /// - any [`Filter::In`] node carries more than [`MAX_IN_VALUES`] values.
+    /// - the filter's nested-boolean depth exceeds [`MAX_FILTER_DEPTH`];
+    /// - any [`Filter::In`] node carries more than [`MAX_IN_VALUES`] values;
+    /// - the filter has more than [`MAX_FILTER_NODES`] nodes in total; or
+    /// - its `In` nodes carry more than [`MAX_FILTER_VALUES`] values in total.
+    ///
+    /// The walk stops at the first violation, so rejecting an oversized
+    /// filter costs no more than the caps themselves. To check a filter you
+    /// only hold by reference without cloning it first, use
+    /// [`FilterEvaluator::try_from`] on a `&Filter`.
     ///
     /// # Errors
     ///
-    /// Returns [`IqdbError::InvalidFilter`] for filters that violate either
+    /// Returns [`IqdbError::InvalidFilter`] for filters that violate any
     /// cap. The variant carries no extra context — callers that need to
     /// distinguish "too deep" from "`In` too wide" can re-walk the filter
     /// themselves or pre-validate against the public consts.
@@ -114,7 +153,35 @@ impl FilterEvaluator {
         validate(&filter)?;
         Ok(Self { filter })
     }
+}
 
+impl TryFrom<&Filter> for FilterEvaluator {
+    type Error = IqdbError;
+
+    /// Validates a borrowed `filter` and clones it only once it passes, so
+    /// an oversized filter is rejected without copying it.
+    ///
+    /// Same caps and errors as [`FilterEvaluator::new`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use iqdb_filter::FilterEvaluator;
+    /// use iqdb_types::{Filter, Value};
+    ///
+    /// let filter = Filter::eq("k", Value::Int(1));
+    /// let evaluator = FilterEvaluator::try_from(&filter).unwrap();
+    /// assert_eq!(evaluator.filter(), &filter);
+    /// ```
+    fn try_from(filter: &Filter) -> Result<Self> {
+        validate(filter)?;
+        Ok(Self {
+            filter: filter.clone(),
+        })
+    }
+}
+
+impl FilterEvaluator {
     /// Evaluates the validated filter against `metadata`.
     ///
     /// `None` means the record has no metadata at all — distinct from an
@@ -280,10 +347,19 @@ fn validate(root: &Filter) -> Result<()> {
         parent_depth: 0,
     });
 
+    // Nodes pushed onto the work list so far, the root included. Checked
+    // before each push, so neither the walk nor the list can outgrow the
+    // node cap.
+    let mut queued: usize = 1;
+    let mut in_values: usize = 0;
     while let Some(Frame { node, parent_depth }) = stack.pop() {
         match node {
             Filter::In { values, .. } => {
                 if values.len() > MAX_IN_VALUES {
+                    return Err(IqdbError::InvalidFilter);
+                }
+                in_values = in_values.saturating_add(values.len());
+                if in_values > MAX_FILTER_VALUES {
                     return Err(IqdbError::InvalidFilter);
                 }
             }
@@ -298,6 +374,10 @@ fn validate(root: &Filter) -> Result<()> {
                 if depth > MAX_FILTER_DEPTH {
                     return Err(IqdbError::InvalidFilter);
                 }
+                if children.len() > MAX_FILTER_NODES - queued {
+                    return Err(IqdbError::InvalidFilter);
+                }
+                queued += children.len();
                 for child in children {
                     stack.push(Frame {
                         node: child,
@@ -307,9 +387,10 @@ fn validate(root: &Filter) -> Result<()> {
             }
             Filter::Not(inner) => {
                 let depth = parent_depth.saturating_add(1);
-                if depth > MAX_FILTER_DEPTH {
+                if depth > MAX_FILTER_DEPTH || queued >= MAX_FILTER_NODES {
                     return Err(IqdbError::InvalidFilter);
                 }
+                queued += 1;
                 stack.push(Frame {
                     node: inner,
                     parent_depth: depth,
